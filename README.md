@@ -4,9 +4,12 @@ A deliberately small hybrid monorepo foundation: Fastify owns the public API and
 
 ## Layout
 - `apps/api`: TypeScript Fastify API, agent registry with PostgreSQL and explicit memory fallback, OpenAPI at `/docs`.
-- `services/policy`: Python FastAPI policy boundary (`/v1/authorize` currently secure default-deny).
+- `services/policy`: Python FastAPI policy boundary with explicit in-memory policy rules and secure default-deny.
+- `services/tool`: deterministic external HTTP tool used by the local showcase.
+- `demo/gradio_app.py`: Gradio client for the governed invocation flow.
 - `packages/contracts/schemas/domain.json`: shared source-of-truth JSON Schema for domain contracts.
 - `infra/docker-compose.yml`: PostgreSQL and Redis.
+- `docs/mvp-evaluation.md`: evidence-based scope, security, performance, and readiness assessment.
 
 ## Local run
 ```sh
@@ -26,11 +29,25 @@ python3 -m venv services/policy/.venv
 pip install -r services/policy/requirements.txt
 pytest -q services/policy/tests
 uvicorn services.policy.app.main:app --reload --port 8000
+# separate shell: start the external demo tool
+uvicorn services.tool.app.main:app --reload --port 8010
 # separate shell: npm run dev:api
 # optional dependencies: docker compose -f infra/docker-compose.yml up -d
 ```
 
-API health: `http://localhost:3000/health`; policy health: `http://localhost:8000/health`. Fastify `POST /v1/authorize` now delegates to the policy service. It returns `503` when the policy service is unavailable and `504` on timeout; policy itself defaults to deny until a policy engine is configured.
+API health: `http://localhost:3000/health`; policy health: `http://localhost:8000/health`. Fastify `POST /v1/authorize` delegates to the policy service. It returns `503` when the policy service is unavailable and `504` on timeout. The policy service defaults to deny until a matching rule is configured.
+
+For a local allow rule, start the policy service with a JSON array:
+
+```sh
+export POLICY_RULES_JSON='[{"policy_id":"demo-weather","effect":"allow","actor_id":"agent-2","tool_id":"weather","action":"invoke","reason":"Demo agent may invoke weather"}]'
+uvicorn services.policy.app.main:app --reload --port 8000
+```
+
+Rules are held in process memory for this MVP. `POST /v1/policies` and
+`GET /v1/policies` support controlled demos; these administrative endpoints are
+not authenticated yet. Rules match exact tool/action values and optionally an
+exact actor; unmatched requests remain denied.
 
 Test the integrated authorization boundary:
 
@@ -97,9 +114,37 @@ curl -X POST http://localhost:3000/v1/mcp/invoke \
   -d '{"agentId":"agent-2","toolId":"example-tool","credentialId":"<credential-id>"}'
 ```
 
-The boundary currently authorizes and records the invocation but does not call
-an external MCP server yet. The memory audit repository is process-local;
-PostgreSQL mode persists events.
+The boundary executes a configurable HTTP tool transport after credential and
+policy checks. Set `MCP_TOOL_URL` to an external MCP-compatible gateway
+endpoint; the request body contains `toolId`, `action`, `payload`, and
+`correlationId`. The response JSON becomes the tool result. If unset, the API
+uses a deterministic local adapter for development. Both policy denials and
+downstream tool failures are audited.
+
+Seed a complete demo flow after starting the API and policy service:
+
+```sh
+npm --workspace @mcp/api run demo:seed
+```
+
+The command creates an example agent and allow policy, issues a scoped
+credential, and prints a ready-to-run invocation command. The credential
+secret is printed once; treat the output as sensitive and revoke the
+credential after the demo.
+
+For the browser showcase, start the API with
+`MCP_TOOL_URL=http://localhost:8010/v1/tools/invoke`, run the seed command,
+then install the demo dependency and launch Gradio:
+
+```sh
+pip install -r demo/requirements.txt
+DEMO_API_URL=http://localhost:3000 python demo/gradio_app.py
+```
+
+Paste the seed output values into the Gradio form. A successful invocation
+shows the external tool result and correlation ID. Revoke the credential with
+`POST /v1/credentials/<credential-id>/revoke`, then repeat the invocation to
+demonstrate enforcement.
 
 The final validation commands are:
 
@@ -109,3 +154,7 @@ python3 -m pytest -q services/policy/tests
 python3 -m json.tool packages/contracts/schemas/domain.json >/dev/null
 docker compose -f infra/docker-compose.yml config >/dev/null
 ```
+
+See [docs/mvp-evaluation.md](docs/mvp-evaluation.md) for the MVP evaluation,
+benchmark interpretation, security assessment, readiness decision, and
+recommended research roadmap.

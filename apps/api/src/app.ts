@@ -7,8 +7,9 @@ import type { AgentInput } from './types.js';
 import { CredentialValidationError, type CredentialRepository } from './credentials.js';
 import { randomUUID } from 'node:crypto';
 import { MemoryAuditRepository, type AuditRepository } from './audit.js';
+import { localToolAdapter, type ToolAdapter } from './tool-adapter.js';
 
-export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository()): FastifyInstance {
+export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository(), invokeTool: ToolAdapter = localToolAdapter): FastifyInstance {
   const app = Fastify({ logger: true });
   app.register(swagger, { openapi: { info: { title: 'MCP Agent API', version: '0.1.0' } } });
   app.register(swaggerUi, { routePrefix: '/docs' });
@@ -62,9 +63,24 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
       await credentials.verify(request.body.credentialId, secret, request.body.agentId, requiredScope);
       const decision = await authorize({ actorId: request.body.agentId, toolId: request.body.toolId, action: request.body.action ?? 'invoke', context: { correlationId: correlation } });
       await audit.record({ correlationId: correlation, eventType: 'authorization', actorId: request.body.agentId, agentId: request.body.agentId, toolId: request.body.toolId, credentialId: request.body.credentialId, allowed: decision.allowed, rationale: decision.reason, metadata: { policyId: decision.policyId } });
-      if (!decision.allowed) return reply.code(403).send({ error: 'invocation denied', reason: decision.reason, correlationId: correlation });
-      await audit.record({ correlationId: correlation, eventType: 'tool_invocation', actorId: request.body.agentId, agentId: request.body.agentId, toolId: request.body.toolId, credentialId: request.body.credentialId, allowed: true, rationale: 'Policy authorized invocation', metadata: {} });
-      return reply.send({ accepted: true, correlationId: correlation, decision });
+      if (!decision.allowed) {
+        await audit.record({ correlationId: correlation, eventType: 'tool_invocation', actorId: request.body.agentId, agentId: request.body.agentId, toolId: request.body.toolId, credentialId: request.body.credentialId, allowed: false, rationale: decision.reason, metadata: { policyId: decision.policyId } });
+        return reply.code(403).send({ error: 'invocation denied', reason: decision.reason, correlationId: correlation });
+      }
+      try {
+        const result = await invokeTool({
+          toolId: request.body.toolId,
+          action: request.body.action ?? 'invoke',
+          payload: request.body.payload ?? {},
+          correlationId: correlation,
+        });
+        await audit.record({ correlationId: correlation, eventType: 'tool_invocation', actorId: request.body.agentId, agentId: request.body.agentId, toolId: request.body.toolId, credentialId: request.body.credentialId, allowed: true, rationale: 'Policy authorized and tool executed', metadata: { policyId: decision.policyId } });
+        return reply.send({ accepted: true, correlationId: correlation, decision, result });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'tool invocation failed';
+        await audit.record({ correlationId: correlation, eventType: 'tool_invocation', actorId: request.body.agentId, agentId: request.body.agentId, toolId: request.body.toolId, credentialId: request.body.credentialId, allowed: false, rationale: reason, metadata: { policyId: decision.policyId } });
+        return reply.code(502).send({ error: 'tool invocation failed', reason, correlationId: correlation });
+      }
     } catch (error) {
       if (error instanceof CredentialValidationError) {
         await audit.record({ correlationId: correlation, eventType: 'authorization', actorId: request.body?.agentId, agentId: request.body?.agentId, toolId: request.body?.toolId, credentialId: request.body?.credentialId, allowed: false, rationale: error.message, metadata: {} });

@@ -100,6 +100,7 @@ test('protected MCP invocation validates credential scope and records correlatio
   });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().correlationId, 'corr-1');
+  assert.equal(response.json().result.output.accepted, true);
   assert.equal(JSON.stringify(await audit.list()).includes(issued.secret), false);
   const denied = await app.inject({
     method: 'POST', url: '/v1/mcp/invoke',
@@ -143,7 +144,7 @@ test('MCP invocation records policy denial and rejects expired credentials', asy
     payload: { agentId: 'agent-deny', toolId: 'blocked', credentialId: deniedCredential.id },
   });
   assert.equal(denied.statusCode, 403);
-  assert.equal((await audit.list()).some((event) => event.correlationId === 'deny-1' && event.allowed === false && event.rationale === 'policy denied'), true);
+  assert.equal((await audit.list()).filter((event) => event.correlationId === 'deny-1' && event.allowed === false).length, 2);
   await deniedApp.close();
 
   const expired = await credentials.issue({ agentId: 'agent-deny', scope: ['tool:expired'], ttlSeconds: 1 });
@@ -156,4 +157,28 @@ test('MCP invocation records policy denial and rejects expired credentials', asy
   });
   assert.equal(expiredResponse.statusCode, 401);
   await expiredApp.close();
+});
+
+test('MCP invocation audits tool adapter failures and does not hide the error', async () => {
+  const agents = new MemoryAgentRepository();
+  await agents.create({ id: 'agent-tool-error', name: 'Tool Error Agent', ownerId: 'owner-1', purpose: 'adapter test', riskTier: 'low' });
+  const credentials = new MemoryCredentialRepository(agents);
+  const issued = await credentials.issue({ agentId: 'agent-tool-error', scope: ['tool:broken'], ttlSeconds: 60 });
+  const audit = new MemoryAuditRepository();
+  const app = buildApp(
+    agents,
+    async () => ({ allowed: true, reason: 'allowed', policyId: 'allow-tool' }),
+    credentials,
+    audit,
+    async () => { throw new Error('downstream tool unavailable'); },
+  );
+  const response = await app.inject({
+    method: 'POST', url: '/v1/mcp/invoke',
+    headers: { authorization: 'Bearer ' + issued.secret, 'x-correlation-id': 'tool-error-1' },
+    payload: { agentId: 'agent-tool-error', toolId: 'broken', credentialId: issued.id },
+  });
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.json().reason, 'downstream tool unavailable');
+  assert.equal((await audit.list()).some((event) => event.correlationId === 'tool-error-1' && event.allowed === false && event.rationale === 'downstream tool unavailable'), true);
+  await app.close();
 });
