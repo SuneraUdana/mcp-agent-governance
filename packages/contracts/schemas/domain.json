@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MCP Agent Platform domain contracts",
+  "$defs": {
+    "Agent": {
+      "type": "object",
+      "required": ["id", "name", "ownerId", "purpose", "riskTier", "status", "createdAt", "updatedAt"],
+      "properties": {
+        "id": {"type": "string", "maxLength": 100},
+        "name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "ownerId": {"type": "string", "minLength": 1, "maxLength": 100},
+        "purpose": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "riskTier": {"enum": ["low", "medium", "high"]},
+        "status": {"enum": ["active", "disabled"]},
+        "expiresAt": {"type": "string", "format": "date-time"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Owner": {"type": "object", "required": ["id", "name"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "email": {"type": "string", "format": "email"}}},
+    "Credential": {"type": "object", "required": ["id", "agentId", "scope", "expiresAt", "createdAt"], "properties": {"id": {"type": "string"}, "agentId": {"type": "string"}, "scope": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string"}}, "expiresAt": {"type": "string", "format": "date-time"}, "revokedAt": {"type": "string", "format": "date-time"}, "createdAt": {"type": "string", "format": "date-time"}}},
+    "Policy": {"type": "object", "required": ["id", "name", "effect"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "effect": {"enum": ["allow", "deny"]}, "toolIds": {"type": "array", "items": {"type": "string"}}}},
+    "Tool": {"type": "object", "required": ["id", "name", "mcpServer"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "mcpServer": {"type": "string"}}},
+    "AuthorizationDecision": {"type": "object", "required": ["allowed", "reason"], "properties": {"allowed": {"type": "boolean"}, "reason": {"type": "string"}, "policyId": {"type": "string"}}},
+    "AuditEvent": {"type": "object", "required": ["id", "correlationId", "eventType", "occurredAt", "rationale", "metadata"], "properties": {"id": {"type": "string"}, "correlationId": {"type": "string"}, "eventType": {"enum": ["authorization", "credential_issued", "credential_revoked", "tool_invocation"]}, "occurredAt": {"type": "string", "format": "date-time"}, "actorId": {"type": "string"}, "agentId": {"type": "string"}, "toolId": {"type": "string"}, "credentialId": {"type": "string"}, "allowed": {"type": "boolean"}, "rationale": {"type": "string"}, "metadata": {"type": "object"}}}
+  }
+}

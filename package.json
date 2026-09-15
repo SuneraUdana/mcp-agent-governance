@@ -1,0 +1,7 @@
+{
+  "name": "mcp-agent-platform",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {"dev:api":"npm --workspace @mcp/api run dev","build":"npm --workspace @mcp/api run build","test":"npm --workspace @mcp/api test"},
+  "devDependencies": {"typescript":"^5.6.3"}
+}

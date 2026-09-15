@@ -1,0 +1,41 @@
+export type RiskTier = 'low' | 'medium' | 'high';
+export type AgentStatus = 'active' | 'disabled';
+export type Agent = {
+  id: string;
+  name: string;
+  ownerId: string;
+  purpose: string;
+  riskTier: RiskTier;
+  status: AgentStatus;
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type AgentInput = Pick<Agent, 'id' | 'name' | 'ownerId' | 'purpose' | 'riskTier'> & { expiresAt?: string };
+export type Owner = { id: string; name: string; email?: string };
+export type Credential = { id: string; ownerId: string; kind: string; secretRef?: string };
+export type CredentialRecord = {
+  id: string;
+  agentId: string;
+  scope: string[];
+  expiresAt: string;
+  revokedAt?: string;
+  createdAt: string;
+};
+export type CredentialIssuance = CredentialRecord & { secret: string };
+export type AuditEvent = {
+  id: string;
+  correlationId: string;
+  eventType: 'authorization' | 'credential_issued' | 'credential_revoked' | 'tool_invocation';
+  occurredAt: string;
+  actorId?: string;
+  agentId?: string;
+  toolId?: string;
+  credentialId?: string;
+  allowed?: boolean;
+  rationale: string;
+  metadata: Record<string, unknown>;
+};
+export type Policy = { id: string; name: string; effect: 'allow' | 'deny'; toolIds?: string[] };
+export type Tool = { id: string; name: string; mcpServer: string };
+export type AuthorizationDecision = { allowed: boolean; reason: string; policyId?: string };
