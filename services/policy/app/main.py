@@ -3,7 +3,7 @@ import json
 import os
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .main_types import PolicyRule
@@ -40,6 +40,13 @@ def configured_repository() -> PolicyRepository:
 
 policy_repository = configured_repository()
 
+def require_admin_token(authorization: str | None = Header(default=None)) -> None:
+    configured_token = os.getenv("POLICY_ADMIN_TOKEN")
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="administrative API is not configured")
+    if authorization != f"Bearer {configured_token}":
+        raise HTTPException(status_code=401, detail="valid administrative bearer token is required")
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -58,12 +65,12 @@ def authorize(request: AuthorizationRequest) -> AuthorizationDecision:
     )
 
 
-@app.get("/v1/policies", response_model=list[PolicyRule])
+@app.get("/v1/policies", response_model=list[PolicyRule], dependencies=[Depends(require_admin_token)])
 def list_policies() -> list[PolicyRule]:
     return policy_repository.list()
 
 
-@app.post("/v1/policies", response_model=PolicyRule, status_code=201)
+@app.post("/v1/policies", response_model=PolicyRule, status_code=201, dependencies=[Depends(require_admin_token)])
 def create_policy(rule: PolicyRule) -> PolicyRule:
     if policy_repository.get(rule.policy_id):
         raise HTTPException(status_code=409, detail="policy already exists")

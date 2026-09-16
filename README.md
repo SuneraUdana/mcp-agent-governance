@@ -16,6 +16,9 @@ A deliberately small hybrid monorepo foundation: Fastify owns the public API and
 cp .env.example .env
 npm install
 npm run build && npm test
+# configure the admin tokens in your shell (use long random values)
+export ADMIN_API_TOKEN='replace-with-a-long-random-admin-token'
+export POLICY_ADMIN_TOKEN='replace-with-a-long-random-policy-admin-token'
 # development fallback (explicit; no database required)
 AGENT_REPOSITORY=memory npm run dev:api
 # PostgreSQL-backed registry
@@ -37,6 +40,13 @@ uvicorn services.tool.app.main:app --reload --port 8010
 ```
 
 API health: `http://localhost:3000/health`; policy health: `http://localhost:8000/health`. Fastify `POST /v1/authorize` delegates to the policy service. It returns `503` when the policy service is unavailable and `504` on timeout. The policy service defaults to deny until a matching rule is configured.
+
+Administrative registry and credential routes require
+`Authorization: Bearer $ADMIN_API_TOKEN`. Policy list/create routes require
+`Authorization: Bearer $POLICY_ADMIN_TOKEN`; both services fail closed with
+`503` if their admin token is not configured and return `401` for a missing or
+invalid token. Keep these tokens server-side and never use them in the Gradio
+client.
 
 For a local allow rule, start the policy service with a JSON array:
 
@@ -83,6 +93,7 @@ Issue a short-lived credential for an active agent:
 
 ```sh
 curl -X POST http://localhost:3000/v1/agents/agent-2/credentials \
+  -H "authorization: Bearer $ADMIN_API_TOKEN" \
   -H "content-type: application/json" \
   -d '{"scope":["tools:read"],"ttlSeconds":300}'
 ```
@@ -95,7 +106,8 @@ active, non-expired agent.
 Revoke a credential:
 
 ```sh
-curl -X POST http://localhost:3000/v1/credentials/<credential-id>/revoke
+curl -X POST http://localhost:3000/v1/credentials/<credential-id>/revoke \
+  -H "authorization: Bearer $ADMIN_API_TOKEN"
 ```
 
 For PostgreSQL, apply `infra/migrations/002_create_credentials.sql` after the

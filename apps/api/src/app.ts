@@ -8,12 +8,18 @@ import { CredentialValidationError, type CredentialRepository } from './credenti
 import { randomUUID } from 'node:crypto';
 import { MemoryAuditRepository, type AuditRepository } from './audit.js';
 import { localToolAdapter, type ToolAdapter } from './tool-adapter.js';
+import { requireAdminToken } from './admin-auth.js';
 
-export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository(), invokeTool: ToolAdapter = localToolAdapter): FastifyInstance {
+export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository(), invokeTool: ToolAdapter = localToolAdapter, adminToken = process.env.ADMIN_API_TOKEN): FastifyInstance {
   const app = Fastify({ logger: true });
   app.register(swagger, { openapi: { info: { title: 'MCP Agent API', version: '0.1.0' } } });
   app.register(swaggerUi, { routePrefix: '/docs' });
   app.get('/health', async () => ({ status: 'ok', service: 'api' }));
+  app.addHook('preHandler', async (request, reply) => {
+    if (!request.url.startsWith('/v1/agents') && !request.url.startsWith('/v1/credentials')) return;
+    const failure = requireAdminToken(request, adminToken);
+    if (failure) return reply.code(failure.statusCode).send({ error: failure.error });
+  });
   app.get('/v1/agents', async () => repository.list());
   app.post<{ Body: AgentInput }>('/v1/agents', async (request, reply) => {
     try { return reply.code(201).send(await repository.create(request.body)); }

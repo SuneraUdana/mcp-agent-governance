@@ -1,5 +1,8 @@
 const apiUrl = process.env.DEMO_API_URL ?? 'http://localhost:3000';
 const policyUrl = process.env.DEMO_POLICY_URL ?? 'http://localhost:8000';
+const apiAdminToken = process.env.ADMIN_API_TOKEN;
+const policyAdminToken = process.env.POLICY_ADMIN_TOKEN;
+if (!apiAdminToken || !policyAdminToken) throw new Error('ADMIN_API_TOKEN and POLICY_ADMIN_TOKEN are required for demo seeding');
 
 async function request<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -10,7 +13,7 @@ async function request<T>(url: string, init: RequestInit): Promise<T> {
 
 const agent = await request<{ id: string }>(`${apiUrl}/v1/agents`, {
   method: 'POST',
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${apiAdminToken}` },
   body: JSON.stringify({
     id: 'demo-agent',
     name: 'Governance Demo Agent',
@@ -25,7 +28,7 @@ const agent = await request<{ id: string }>(`${apiUrl}/v1/agents`, {
 
 await request(`${policyUrl}/v1/policies`, {
   method: 'POST',
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${policyAdminToken}` },
   body: JSON.stringify({
     policy_id: 'demo-tool-allow',
     effect: 'allow',
@@ -42,7 +45,7 @@ const credential = await request<{ id: string; secret: string; expiresAt: string
   `${apiUrl}/v1/agents/${agent.id}/credentials`,
   {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiAdminToken}` },
     body: JSON.stringify({ scope: ['tool:demo-tool'], ttlSeconds: 900 }),
   },
 );
