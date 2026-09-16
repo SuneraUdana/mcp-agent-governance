@@ -1,4 +1,4 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import type { AgentRepository } from './registry.js';
 import type { CredentialIssuance, CredentialRecord } from './types.js';
 
@@ -17,6 +17,12 @@ export interface CredentialRepository {
 }
 
 type StoredCredential = CredentialRecord & { secretHash: string };
+
+export function hashesMatch(providedHash: string, storedHash: string): boolean {
+  const provided = Buffer.from(providedHash, 'utf8');
+  const stored = Buffer.from(storedHash, 'utf8');
+  return provided.length === stored.length && timingSafeEqual(provided, stored);
+}
 
 export function validateCredentialRequest(request: CredentialRequest): void {
   if (!request.agentId?.trim()) throw new CredentialValidationError('agentId is required');
@@ -66,7 +72,7 @@ export class MemoryCredentialRepository implements CredentialRepository {
     if (!record || record.agentId !== agentId) throw new CredentialValidationError('credential is invalid');
     if (record.revokedAt || Date.parse(record.expiresAt) <= Date.now()) throw new CredentialValidationError('credential is expired or revoked');
     const hash = createHash('sha256').update(secret).digest('hex');
-    if (hash !== record.secretHash) throw new CredentialValidationError('credential is invalid');
+    if (!hashesMatch(hash, record.secretHash)) throw new CredentialValidationError('credential is invalid');
     if (!record.scope.includes(requiredScope) && !record.scope.includes('tools:invoke')) {
       throw new CredentialValidationError('credential scope does not permit this tool');
     }

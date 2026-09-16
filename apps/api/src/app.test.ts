@@ -4,6 +4,13 @@ import { buildApp } from './app.js';
 import { MemoryAgentRepository } from './registry.js';
 import { MemoryCredentialRepository } from './credentials.js';
 import { MemoryAuditRepository } from './audit.js';
+import { hashesMatch } from './credentials.js';
+
+test('credential hash comparison is exact and length-safe', () => {
+  assert.equal(hashesMatch('abc', 'abc'), true);
+  assert.equal(hashesMatch('abc', 'abd'), false);
+  assert.equal(hashesMatch('abc', 'ab'), false);
+});
 
 test('agent registry supports lifecycle and expiry rules', async () => {
   const agents = new MemoryAgentRepository();

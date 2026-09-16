@@ -2,7 +2,7 @@ import pg from 'pg';
 import { randomBytes, createHash } from 'node:crypto';
 import type { AgentRepository } from './registry.js';
 import type { CredentialIssuance, CredentialRecord } from './types.js';
-import { CredentialValidationError, validateCredentialRequest, type CredentialRepository, type CredentialRequest, DEFAULT_CREDENTIAL_TTL_SECONDS } from './credentials.js';
+import { CredentialValidationError, hashesMatch, validateCredentialRequest, type CredentialRepository, type CredentialRequest, DEFAULT_CREDENTIAL_TTL_SECONDS } from './credentials.js';
 
 export class PostgresCredentialRepository implements CredentialRepository {
   private readonly pool: pg.Pool;
@@ -43,7 +43,7 @@ export class PostgresCredentialRepository implements CredentialRepository {
     );
     const record = result.rows[0];
     if (!record || record.revokedAt || Date.parse(record.expiresAt) <= Date.now() ||
-      createHash('sha256').update(secret).digest('hex') !== record.secretHash) {
+      !hashesMatch(createHash('sha256').update(secret).digest('hex'), record.secretHash)) {
       throw new CredentialValidationError('credential is invalid, expired, or revoked');
     }
     if (!record.scope.includes(requiredScope) && !record.scope.includes('tools:invoke')) {
