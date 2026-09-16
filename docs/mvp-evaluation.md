@@ -33,7 +33,7 @@ The MVP evaluates whether the platform can:
 | --- | --- | --- |
 | Fastify API | Public API, registry lifecycle, credential checks, MCP boundary, audit writes | Implemented and covered by API tests |
 | FastAPI policy service | Authorization decision contract | Implemented with secure default-deny behavior |
-| PostgreSQL | Durable agents, credentials, and audit events | Migrations and repository paths implemented |
+| PostgreSQL | Durable agents, credentials, policies, and audit events | Migrations and repository paths implemented |
 | Redis | Provisioned infrastructure for a future cache/use case | Not used by the current vertical slice |
 | Shared JSON Schema | Cross-service domain contract | Parses successfully and reflects current credential/audit shapes |
 
@@ -75,8 +75,8 @@ policy service suite contains two tests for health and default-deny behavior.
 
 - Administrative endpoints are not protected by an administrator identity or
   role model.
-- Policy rules are currently process-local and are not yet persisted or
-  versioned; unmatched requests remain denied.
+- Memory policy rules are process-local. PostgreSQL mode persists active rules
+  with version and status fields; unmatched requests remain denied.
 - Constant-time secret comparison should be used for production-grade
   verification.
 - Rate limiting, abuse detection, key rotation, and owner identity
@@ -133,8 +133,9 @@ and can be applied independently. The remaining operational gaps are:
 
 ## Recommended next research
 
-1. Add a persisted, versioned policy model with allow and deny test cases.
-2. Replace the local adapter with a real MCP/tool transport and measure end-to-end tool latency.
+1. Protect policy administration with an authenticated owner/admin boundary.
+2. Replace the demo HTTP adapter with a standards-complete MCP transport and
+   measure end-to-end tool latency.
 3. Add administrator authentication, rate limiting, constant-time comparisons,
    key rotation, and owner identity validation.
 4. Add authenticated audit search, retention, and tamper-evidence controls.

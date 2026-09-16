@@ -23,6 +23,7 @@ docker compose -f infra/docker-compose.yml up -d postgres redis
 psql "$DATABASE_URL" -f infra/migrations/001_create_agents.sql
 psql "$DATABASE_URL" -f infra/migrations/002_create_credentials.sql
 psql "$DATABASE_URL" -f infra/migrations/003_create_audit_events.sql
+psql "$DATABASE_URL" -f infra/migrations/004_create_policies.sql
 AGENT_REPOSITORY=postgres npm run dev:api
 python3 -m venv services/policy/.venv
 . services/policy/.venv/bin/activate
@@ -44,10 +45,15 @@ export POLICY_RULES_JSON='[{"policy_id":"demo-weather","effect":"allow","actor_i
 uvicorn services.policy.app.main:app --reload --port 8000
 ```
 
-Rules are held in process memory for this MVP. `POST /v1/policies` and
-`GET /v1/policies` support controlled demos; these administrative endpoints are
-not authenticated yet. Rules match exact tool/action values and optionally an
-exact actor; unmatched requests remain denied.
+Set `POLICY_REPOSITORY=postgres` with `DATABASE_URL` to persist policies in
+PostgreSQL; the migration order is `001` through `004`. The default
+`POLICY_REPOSITORY=memory` mode is process-local and can be seeded with
+`POLICY_RULES_JSON`. `POST /v1/policies` and `GET /v1/policies` support
+controlled demos; these administrative endpoints are not authenticated yet.
+Rules match exact tool/action values and optionally an exact actor. A
+specific actor match takes precedence over a wildcard actor match; within the
+same specificity, deny takes precedence over allow. Unmatched requests remain
+denied.
 
 Test the integrated authorization boundary:
 
