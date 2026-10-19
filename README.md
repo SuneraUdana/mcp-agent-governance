@@ -7,6 +7,7 @@ A deliberately small hybrid monorepo foundation: Fastify owns the public API and
 - `services/policy`: Python FastAPI policy boundary with explicit in-memory policy rules and secure default-deny.
 - `services/tool`: deterministic Streamable HTTP MCP server used by the local showcase.
 - `demo/gradio_app.py`: Gradio client for the governed invocation flow.
+- `apps/dashboard`: React/Vite operator dashboard for read-only governance overview and audit activity.
 - `packages/contracts/schemas/domain.json`: shared source-of-truth JSON Schema for domain contracts.
 - `infra/docker-compose.yml`: PostgreSQL and Redis.
 - `docs/mvp-evaluation.md`: evidence-based scope, security, performance, and readiness assessment.
@@ -41,6 +42,23 @@ uvicorn services.tool.app.main:app --reload --port 8010
 ```
 
 API health: `http://localhost:3000/health`; policy health: `http://localhost:8000/health`. Fastify `POST /v1/authorize` delegates to the policy service. It returns `503` when the policy service is unavailable and `504` on timeout. The policy service defaults to deny until a matching rule is configured.
+
+## Operator dashboard
+
+The API exposes authenticated read-only overview routes:
+
+- `GET /v1/dashboard/summary`: agent status/risk counts, audit totals, and the latest ten safe audit events.
+- `GET /v1/audit?limit=50&eventType=authorization`: newest audit events, optionally filtered by event type.
+
+Both routes require the same `ADMIN_API_TOKEN` bearer token as the registry routes. Start the API, then run the dashboard in another shell:
+
+```sh
+export ADMIN_API_TOKEN='replace-with-a-long-random-admin-token'
+export API_URL='http://localhost:3000'
+npm --workspace @mcp/dashboard run dev
+```
+
+Open `http://localhost:5173`. Vite proxies API requests and injects the token server-side; the token is never bundled into browser code. For a deployed dashboard, configure the hosting reverse proxy to authenticate `/v1/dashboard/*` and `/v1/audit` server-side rather than adding a token to frontend environment variables. The dashboard explicitly handles loading, empty, and API error states. Live refresh and SSE/WebSocket transport are intentionally deferred to a future phase.
 
 The policy service requires `Authorization: Bearer <POLICY_SERVICE_TOKEN>` on
 `POST /v1/authorize`; the API client sends this token from its environment.

@@ -3,7 +3,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { AgentConflictError, AgentValidationError, type AgentRepository } from './registry.js';
 import { createPolicyAuthorizer, PolicyServiceTimeoutError, PolicyServiceUnavailableError, type PolicyAuthorizer } from './policy-client.js';
-import type { AgentInput } from './types.js';
+import type { AgentInput, AuditEventType, AuditListResponse, DashboardSummary } from './types.js';
 import { CredentialValidationError, type CredentialRepository } from './credentials.js';
 import { randomUUID } from 'node:crypto';
 import { MemoryAuditRepository, type AuditRepository } from './audit.js';
@@ -68,6 +68,87 @@ const authorizationBodySchema = {
     context: { type: 'object', additionalProperties: true },
   },
 } as const;
+const auditEventTypes = ['authorization', 'credential_issued', 'credential_revoked', 'tool_invocation'] as const;
+const auditQuerySchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    limit: { type: 'string', pattern: '^(?:[1-9]|[1-9][0-9]|100)$', default: '50' },
+    eventType: { type: 'string', enum: auditEventTypes },
+  },
+} as const;
+const auditEventResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'correlationId', 'eventType', 'occurredAt', 'rationale', 'metadata'],
+  properties: {
+    id: nonEmptyString,
+    correlationId: nonEmptyString,
+    eventType: { type: 'string', enum: auditEventTypes },
+    occurredAt: { type: 'string', format: 'date-time' },
+    actorId: { type: 'string' },
+    agentId: { type: 'string' },
+    toolId: { type: 'string' },
+    credentialId: { type: 'string' },
+    allowed: { type: 'boolean' },
+    rationale: { type: 'string' },
+    metadata: { type: 'object', additionalProperties: true },
+  },
+} as const;
+const auditListResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['events', 'total'],
+  properties: {
+    events: { type: 'array', items: auditEventResponseSchema },
+    total: { type: 'integer', minimum: 0 },
+  },
+} as const;
+const dashboardSummaryResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['generatedAt', 'agents', 'audit', 'recentEvents'],
+  properties: {
+    generatedAt: { type: 'string', format: 'date-time' },
+    agents: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['total', 'active', 'disabled', 'byRiskTier'],
+      properties: {
+        total: { type: 'integer', minimum: 0 },
+        active: { type: 'integer', minimum: 0 },
+        disabled: { type: 'integer', minimum: 0 },
+        byRiskTier: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['low', 'medium', 'high'],
+          properties: {
+            low: { type: 'integer', minimum: 0 },
+            medium: { type: 'integer', minimum: 0 },
+            high: { type: 'integer', minimum: 0 },
+          },
+        },
+      },
+    },
+    audit: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['total', 'allowed', 'denied', 'byEventType'],
+      properties: {
+        total: { type: 'integer', minimum: 0 },
+        allowed: { type: 'integer', minimum: 0 },
+        denied: { type: 'integer', minimum: 0 },
+        byEventType: {
+          type: 'object',
+          additionalProperties: false,
+          required: auditEventTypes,
+          properties: Object.fromEntries(auditEventTypes.map((type) => [type, { type: 'integer', minimum: 0 }])),
+        },
+      },
+    },
+    recentEvents: { type: 'array', items: auditEventResponseSchema },
+  },
+} as const;
 
 export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository(), invokeTool: ToolAdapter = localToolAdapter, adminToken = process.env.ADMIN_API_TOKEN): FastifyInstance {
   const app = Fastify({ logger: true, ajv: { customOptions: { coerceTypes: false } } });
@@ -75,7 +156,7 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
   app.register(swaggerUi, { routePrefix: '/docs' });
   app.get('/health', async () => ({ status: 'ok', service: 'api' }));
   app.addHook('preHandler', async (request, reply) => {
-    if (!request.url.startsWith('/v1/agents') && !request.url.startsWith('/v1/credentials')) return;
+    if (!request.url.startsWith('/v1/agents') && !request.url.startsWith('/v1/credentials') && !request.url.startsWith('/v1/dashboard') && !request.url.startsWith('/v1/audit')) return;
     const failure = requireAdminToken(request, adminToken);
     if (failure) return reply.code(failure.statusCode).send({ error: failure.error });
   });
@@ -174,7 +255,53 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
     }
 
   });
+  app.get<{ Querystring: { limit?: string; eventType?: AuditEventType }; Reply: AuditListResponse }>('/v1/audit', { schema: { querystring: auditQuerySchema, response: { 200: auditListResponseSchema } } }, async (request) => {
+    const allEvents = await audit.list();
+    const filtered = request.query.eventType ? allEvents.filter((event) => event.eventType === request.query.eventType) : allEvents;
+    const events = filtered.slice().sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)).slice(0, Number(request.query.limit ?? 50)).map(publicAuditEvent);
+    return { events, total: filtered.length };
+  });
+  app.get<{ Reply: DashboardSummary }>('/v1/dashboard/summary', { schema: { response: { 200: dashboardSummaryResponseSchema } } }, async () => {
+    const [agents, auditEvents] = await Promise.all([repository.list(), audit.list()]);
+    const summary: DashboardSummary = {
+      generatedAt: new Date().toISOString(),
+      agents: {
+        total: agents.length,
+        active: agents.filter((agent) => agent.status === 'active').length,
+        disabled: agents.filter((agent) => agent.status === 'disabled').length,
+        byRiskTier: {
+          low: agents.filter((agent) => agent.riskTier === 'low').length,
+          medium: agents.filter((agent) => agent.riskTier === 'medium').length,
+          high: agents.filter((agent) => agent.riskTier === 'high').length,
+        },
+      },
+      audit: {
+        total: auditEvents.length,
+        allowed: auditEvents.filter((event) => event.allowed === true).length,
+        denied: auditEvents.filter((event) => event.allowed === false).length,
+        byEventType: Object.fromEntries(auditEventTypes.map((type) => [type, auditEvents.filter((event) => event.eventType === type).length])) as DashboardSummary['audit']['byEventType'],
+      },
+      recentEvents: auditEvents.slice().sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)).slice(0, 10).map(publicAuditEvent),
+    };
+    return summary;
+  });
   return app;
+}
+
+function publicAuditEvent(event: Awaited<ReturnType<AuditRepository['list']>>[number]) {
+  return {
+    ...event,
+    metadata: redactSensitiveMetadata(event.metadata),
+  };
+}
+
+function redactSensitiveMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(metadata).map(([key, value]) => {
+    if (/(secret|token|password|credential)/i.test(key)) return [key, '[REDACTED]'];
+    if (Array.isArray(value)) return [key, value.map((item) => typeof item === 'object' && item !== null ? redactSensitiveMetadata(item as Record<string, unknown>) : item)];
+    if (typeof value === 'object' && value !== null) return [key, redactSensitiveMetadata(value as Record<string, unknown>)];
+    return [key, value];
+  }));
 }
 
 function correlationId(value: string | string[] | undefined): string {

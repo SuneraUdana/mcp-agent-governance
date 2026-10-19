@@ -22,6 +22,49 @@ test('administrative routes reject missing and invalid tokens', async () => {
   await app.close();
 });
 
+test('dashboard overview and audit endpoints are authenticated and read-only', async () => {
+  const agents = new MemoryAgentRepository();
+  const audit = new MemoryAuditRepository();
+  await agents.create({ id: 'dashboard-agent', name: 'Dashboard Agent', ownerId: 'owner-1', purpose: 'overview test', riskTier: 'high' });
+  await audit.record({
+    correlationId: 'dashboard-1',
+    eventType: 'authorization',
+    agentId: 'dashboard-agent',
+    allowed: false,
+    rationale: 'policy denied',
+    metadata: { policyId: 'policy-1', token: 'must-not-leak' },
+  });
+  await audit.record({
+    correlationId: 'dashboard-2',
+    eventType: 'tool_invocation',
+    agentId: 'dashboard-agent',
+    allowed: true,
+    rationale: 'allowed',
+    metadata: { credentialSecret: 'must-not-leak' },
+  });
+  const app = buildApp(agents, undefined, undefined, audit, undefined, 'test-admin');
+  assert.equal((await app.inject('/v1/dashboard/summary')).statusCode, 401);
+  const summary = await app.inject({ method: 'GET', url: '/v1/dashboard/summary', headers: adminHeaders });
+  assert.equal(summary.statusCode, 200);
+  assert.deepEqual(summary.json().agents, {
+    total: 1,
+    active: 1,
+    disabled: 0,
+    byRiskTier: { low: 0, medium: 0, high: 1 },
+  });
+  assert.equal(summary.json().audit.total, 2);
+  assert.equal(summary.json().audit.allowed, 1);
+  assert.equal(summary.json().audit.denied, 1);
+  assert.equal(summary.json().recentEvents.some((event: { metadata: Record<string, unknown> }) => event.metadata.credentialSecret === '[REDACTED]'), true);
+  const filtered = await app.inject({ method: 'GET', url: '/v1/audit?eventType=authorization&limit=1', headers: adminHeaders });
+  assert.equal(filtered.statusCode, 200);
+  assert.equal(filtered.json().events.length, 1);
+  assert.equal(filtered.json().total, 1);
+  assert.equal(filtered.json().events[0].metadata.token, '[REDACTED]');
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/audit?limit=0', headers: adminHeaders })).statusCode, 400);
+  await app.close();
+});
+
 test('agent registry supports lifecycle and expiry rules', async () => {
   const agents = new MemoryAgentRepository();
   const app = buildApp(agents, undefined, new MemoryCredentialRepository(agents), new MemoryAuditRepository(), undefined, 'test-admin');

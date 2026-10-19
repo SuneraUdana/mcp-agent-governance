@@ -1,0 +1,31 @@
+:root { color: #e8eef8; background: #0b1020; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+.shell { max-width: 1180px; margin: 0 auto; padding: 48px 28px 72px; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 36px; }
+.eyebrow { color: #63d5c6; font-size: 12px; font-weight: 700; letter-spacing: .16em; margin: 0 0 10px; }
+h1, h2, p { margin-top: 0; }
+h1 { font-size: clamp(32px, 5vw, 54px); letter-spacing: -.04em; margin-bottom: 12px; }
+h2 { font-size: 18px; margin-bottom: 6px; }
+.muted { color: #91a0b8; }
+.status { border: 1px solid #31526c; border-radius: 999px; color: #9bded7; font-size: 12px; font-weight: 700; padding: 8px 12px; }
+.content { display: grid; gap: 20px; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.metric, .panel, .state { background: #121a2a; border: 1px solid #263248; border-radius: 16px; }
+.metric { display: grid; gap: 12px; padding: 22px; }
+.metric strong { font-size: 38px; letter-spacing: -.04em; }
+.metric small { color: #b8c3d5; }
+.panel { padding: 24px; }
+.chart-panel { min-height: 300px; }
+.panel-heading { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.events { display: grid; }
+.event { align-items: center; border-top: 1px solid #263248; display: flex; gap: 14px; padding: 16px 0; }
+.event-dot { background: #63d5c6; border-radius: 50%; flex: 0 0 9px; height: 9px; }
+.event-dot.denied { background: #f08b8b; }
+.event-main { display: grid; gap: 4px; flex: 1; }
+.event-main span { color: #91a0b8; font-size: 14px; }
+time { color: #91a0b8; font-size: 12px; white-space: nowrap; }
+.state { display: grid; gap: 8px; padding: 28px; }
+.state.error { border-color: #713b4d; }
+.empty { color: #91a0b8; padding: 36px 0 18px; text-align: center; }
+@media (max-width: 720px) { .shell { padding: 28px 16px 48px; } .header { display: block; } .status { display: inline-block; margin-top: 16px; } .cards { grid-template-columns: 1fr; } .event { align-items: flex-start; } time { white-space: normal; text-align: right; } }

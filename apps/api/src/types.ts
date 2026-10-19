@@ -36,6 +36,27 @@ export type AuditEvent = {
   rationale: string;
   metadata: Record<string, unknown>;
 };
+export type AuditEventType = AuditEvent['eventType'];
+export type AuditListResponse = {
+  events: AuditEvent[];
+  total: number;
+};
+export type DashboardSummary = {
+  generatedAt: string;
+  agents: {
+    total: number;
+    active: number;
+    disabled: number;
+    byRiskTier: Record<RiskTier, number>;
+  };
+  audit: {
+    total: number;
+    allowed: number;
+    denied: number;
+    byEventType: Record<AuditEventType, number>;
+  };
+  recentEvents: AuditEvent[];
+};
 /** Internal/public API shape; the policy-service adapter maps this to snake_case wire JSON. */
 export type Policy = {
   policyId: string;

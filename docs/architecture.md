@@ -6,8 +6,12 @@ The MVP uses a split service boundary:
 Client
   |
   v
+Operator dashboard (:5173, dev proxy)
+  |
+  v
 Fastify API (:3000)
   |-- Agent registry (in-memory for this slice)
+  |-- Read-only operator overview (/v1/dashboard/summary, /v1/audit)
   |-- MCP gateway boundary (/v1/mcp/invoke)
   `-- Authorization boundary (/v1/authorize)
           |
@@ -49,6 +53,12 @@ The Fastify-to-policy authorization call uses a dedicated bearer token from
 `POLICY_SERVICE_TOKEN`. The policy service does not expose a generic audit
 ingestion endpoint; audit records are created by the Fastify API from
 validated internal events.
+
+The operator dashboard uses TanStack Query for API state and Recharts for its
+risk overview. The development proxy injects `ADMIN_API_TOKEN` server-side so
+credentials never enter browser bundles. Production deployments should put
+the equivalent authentication in a reverse proxy or backend-for-frontend.
+Live SSE/WebSocket updates are intentionally not part of this increment.
 
 ## Policy contract
 
