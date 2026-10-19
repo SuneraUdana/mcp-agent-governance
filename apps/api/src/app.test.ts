@@ -48,6 +48,24 @@ test('duplicate agents and invalid risk tiers are rejected', async () => {
   await app.close();
 });
 
+test('public API routes reject malformed JSON body types before handlers run', async () => {
+  const agents = new MemoryAgentRepository();
+  const credentials = new MemoryCredentialRepository(agents);
+  const app = buildApp(agents, undefined, credentials, new MemoryAuditRepository(), undefined, 'test-admin');
+  const cases = [
+    { method: 'POST' as const, url: '/v1/agents', payload: 'null' },
+    { method: 'PUT' as const, url: '/v1/agents/a1', payload: JSON.stringify({ name: ['not-a-string'] }) },
+    { method: 'POST' as const, url: '/v1/agents/a1/credentials', payload: JSON.stringify({ scope: 'not-an-array' }) },
+    { method: 'POST' as const, url: '/v1/mcp/invoke', payload: JSON.stringify({ agentId: {}, toolId: 'demo-tool', credentialId: 'credential' }) },
+    { method: 'POST' as const, url: '/v1/authorize', payload: JSON.stringify({ actorId: 'agent', toolId: 42 }) },
+  ];
+  for (const request of cases) {
+    const headers = request.url.startsWith('/v1/authorize') ? { 'content-type': 'application/json' } : { ...adminHeaders, 'content-type': 'application/json' };
+    assert.equal((await app.inject({ ...request, headers })).statusCode, 400, request.url);
+  }
+  await app.close();
+});
+
 test('authorization delegates to policy service and returns its decision', async () => {
   const app = buildApp(new MemoryAgentRepository(), async (request) => ({
     allowed: false,

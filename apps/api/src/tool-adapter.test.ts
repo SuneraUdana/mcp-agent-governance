@@ -37,3 +37,19 @@ test('HTTP tool adapter surfaces downstream failures', async () => {
   );
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
+
+test('HTTP tool adapter surfaces successful HTTP responses that reject the tool', async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ status: 'rejected', reason: 'unknown demo tool' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const adapter = createHttpToolAdapter(`http://127.0.0.1:${address.port}`, 1000);
+  await assert.rejects(
+    adapter({ toolId: 'unknown-tool', action: 'invoke', payload: {}, correlationId: 'corr-3' }),
+    (error: unknown) => error instanceof ToolTransportError && error.message === 'unknown demo tool',
+  );
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+});

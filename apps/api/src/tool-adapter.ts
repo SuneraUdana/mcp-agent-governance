@@ -41,6 +41,10 @@ export function createHttpToolAdapter(
       });
       if (!response.ok) throw new ToolTransportError(`tool transport returned HTTP ${response.status}`);
       const output = await response.json() as Record<string, unknown>;
+      if (output.status === 'rejected') {
+        const reason = typeof output.reason === 'string' ? output.reason : 'tool rejected the invocation';
+        throw new ToolTransportError(reason);
+      }
       return { toolId: invocation.toolId, output };
     } catch (error) {
       if (error instanceof ToolTransportError) throw error;

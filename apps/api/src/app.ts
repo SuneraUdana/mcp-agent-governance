@@ -10,8 +10,67 @@ import { MemoryAuditRepository, type AuditRepository } from './audit.js';
 import { localToolAdapter, type ToolAdapter } from './tool-adapter.js';
 import { requireAdminToken } from './admin-auth.js';
 
+const nonEmptyString = { type: 'string', minLength: 1 } as const;
+const agentBodySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'name', 'ownerId', 'purpose', 'riskTier'],
+  properties: {
+    id: { ...nonEmptyString, maxLength: 100 },
+    name: { ...nonEmptyString, maxLength: 200 },
+    ownerId: { ...nonEmptyString, maxLength: 100 },
+    purpose: { ...nonEmptyString, maxLength: 1000 },
+    riskTier: { type: 'string', enum: ['low', 'medium', 'high'] },
+    expiresAt: { type: 'string' },
+  },
+} as const;
+const agentUpdateBodySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'ownerId', 'purpose', 'riskTier'],
+  properties: {
+    name: { ...nonEmptyString, maxLength: 200 },
+    ownerId: { ...nonEmptyString, maxLength: 100 },
+    purpose: { ...nonEmptyString, maxLength: 1000 },
+    riskTier: { type: 'string', enum: ['low', 'medium', 'high'] },
+    expiresAt: { type: 'string' },
+  },
+} as const;
+const credentialBodySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['scope'],
+  properties: {
+    scope: { type: 'array', minItems: 1, maxItems: 20, items: nonEmptyString },
+    ttlSeconds: { type: 'integer', minimum: 1, maximum: 3600 },
+  },
+} as const;
+const invocationBodySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['agentId', 'toolId', 'credentialId'],
+  properties: {
+    agentId: nonEmptyString,
+    toolId: nonEmptyString,
+    credentialId: nonEmptyString,
+    action: nonEmptyString,
+    payload: { type: 'object', additionalProperties: true },
+  },
+} as const;
+const authorizationBodySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['actorId', 'toolId'],
+  properties: {
+    actorId: nonEmptyString,
+    toolId: nonEmptyString,
+    action: nonEmptyString,
+    context: { type: 'object', additionalProperties: true },
+  },
+} as const;
+
 export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository(), invokeTool: ToolAdapter = localToolAdapter, adminToken = process.env.ADMIN_API_TOKEN): FastifyInstance {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, ajv: { customOptions: { coerceTypes: false } } });
   app.register(swagger, { openapi: { info: { title: 'MCP Agent API', version: '0.1.0' } } });
   app.register(swaggerUi, { routePrefix: '/docs' });
   app.get('/health', async () => ({ status: 'ok', service: 'api' }));
@@ -21,7 +80,7 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
     if (failure) return reply.code(failure.statusCode).send({ error: failure.error });
   });
   app.get('/v1/agents', async () => repository.list());
-  app.post<{ Body: AgentInput }>('/v1/agents', async (request, reply) => {
+  app.post<{ Body: AgentInput }>('/v1/agents', { schema: { body: agentBodySchema } }, async (request, reply) => {
     try { return reply.code(201).send(await repository.create(request.body)); }
     catch (error) { return handleRegistryError(error, reply); }
   });
@@ -29,7 +88,7 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
     const agent = await repository.get(request.params.id);
     return agent ? agent : reply.code(404).send({ error: 'agent not found' });
   });
-  app.put<{ Params: { id: string }; Body: Omit<AgentInput, 'id'> }>('/v1/agents/:id', async (request, reply) => {
+  app.put<{ Params: { id: string }; Body: Omit<AgentInput, 'id'> }>('/v1/agents/:id', { schema: { body: agentUpdateBodySchema } }, async (request, reply) => {
     try {
       const agent = await repository.update(request.params.id, request.body);
       return agent ? agent : reply.code(404).send({ error: 'agent not found or already disabled' });
@@ -39,7 +98,7 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
     const agent = await repository.deactivate(request.params.id);
     return agent ? agent : reply.code(404).send({ error: 'agent not found' });
   });
-  app.post<{ Params: { id: string }; Body: { scope: string[]; ttlSeconds?: number } }>('/v1/agents/:id/credentials', async (request, reply) => {
+  app.post<{ Params: { id: string }; Body: { scope: string[]; ttlSeconds?: number } }>('/v1/agents/:id/credentials', { schema: { body: credentialBodySchema } }, async (request, reply) => {
     const credentialRepository = credentials;
     if (!credentialRepository) return reply.code(503).send({ error: 'credential service is not configured' });
     try {
@@ -57,7 +116,7 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
     if (revoked) await audit.record({ correlationId: correlationId(request.headers['x-correlation-id']), eventType: 'credential_revoked', agentId: revoked.agentId, credentialId: revoked.id, rationale: 'Credential revoked', metadata: {} });
     return revoked ? reply.send(revoked) : reply.code(404).send({ error: 'credential not found' });
   });
-  app.post<{ Body: { agentId: string; toolId: string; credentialId: string; action?: string; payload?: Record<string, unknown> } }>('/v1/mcp/invoke', async (request, reply) => {
+  app.post<{ Body: { agentId: string; toolId: string; credentialId: string; action?: string; payload?: Record<string, unknown> } }>('/v1/mcp/invoke', { schema: { body: invocationBodySchema } }, async (request, reply) => {
     if (!credentials) return reply.code(503).send({ error: 'credential service is not configured' });
     const correlation = correlationId(request.headers['x-correlation-id']);
     const secret = request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : '';
@@ -95,7 +154,7 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
       throw error;
     }
   });
-  app.post<{ Body: { actorId: string; toolId: string; action?: string; context?: Record<string, unknown> } }>('/v1/authorize', async (request, reply) => {
+  app.post<{ Body: { actorId: string; toolId: string; action?: string; context?: Record<string, unknown> } }>('/v1/authorize', { schema: { body: authorizationBodySchema } }, async (request, reply) => {
     if (!request.body?.actorId || !request.body?.toolId) {
       return reply.code(400).send({ error: 'actorId and toolId are required' });
     }

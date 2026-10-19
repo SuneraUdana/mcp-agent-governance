@@ -25,3 +25,17 @@ def test_demo_tool_executes():
     assert response.status_code == 200
     assert response.json()["status"] == "executed"
     assert response.json()["correlationId"] == "corr-demo"
+
+
+def test_unknown_tool_is_rejected_with_error_status():
+    response = client.post(
+        "/v1/tools/invoke",
+        json={
+            "toolId": "unknown-tool",
+            "action": "invoke",
+            "payload": {},
+            "correlationId": "corr-unknown",
+        },
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "unknown demo tool"

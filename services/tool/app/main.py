@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="MCP Demo Tool", version="0.1.0")
@@ -21,7 +21,7 @@ def health() -> dict[str, str]:
 @app.post("/v1/tools/invoke")
 def invoke(request: ToolInvocation) -> dict[str, Any]:
     if request.toolId != "demo-tool":
-        return {"toolId": request.toolId, "status": "rejected", "reason": "unknown demo tool"}
+        raise HTTPException(status_code=404, detail="unknown demo tool")
     return {
         "toolId": request.toolId,
         "status": "executed",
