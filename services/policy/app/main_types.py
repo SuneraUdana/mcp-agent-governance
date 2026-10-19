@@ -1,9 +1,13 @@
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class PolicyRule(BaseModel):
+class PolicyContractModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PolicyRule(PolicyContractModel):
     policy_id: str = Field(min_length=1)
     effect: Literal["allow", "deny"]
     tool_id: str = Field(min_length=1)
@@ -11,3 +15,16 @@ class PolicyRule(BaseModel):
     action: str = Field(default="invoke", min_length=1)
     reason: str = Field(min_length=1)
     version: int = Field(default=1, ge=1)
+
+
+class AuthorizationRequest(PolicyContractModel):
+    actor_id: str = Field(min_length=1)
+    tool_id: str = Field(min_length=1)
+    action: str = Field(default="invoke", min_length=1)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuthorizationDecision(PolicyContractModel):
+    allowed: bool
+    reason: str
+    policy_id: str | None = None

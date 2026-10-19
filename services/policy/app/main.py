@@ -1,27 +1,12 @@
 import json
 import os
-from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
 
-from .main_types import PolicyRule
+from .main_types import AuthorizationDecision, AuthorizationRequest, PolicyRule
 from .repository import MemoryPolicyRepository, PolicyRepository, create_policy_repository
 
 app = FastAPI(title="MCP Policy Service", version="0.2.0")
-
-
-class AuthorizationRequest(BaseModel):
-    actor_id: str
-    tool_id: str
-    action: str = "invoke"
-    context: dict[str, Any] = Field(default_factory=dict)
-
-
-class AuthorizationDecision(BaseModel):
-    allowed: bool
-    reason: str
-    policy_id: str | None = None
 
 
 def configured_repository() -> PolicyRepository:

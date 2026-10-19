@@ -1,4 +1,4 @@
-import type { AuthorizationDecision } from './types.js';
+import type { AuthorizationDecision, AuthorizationDecisionWire } from './types.js';
 
 export type AuthorizationRequest = {
   actorId: string;
@@ -36,11 +36,15 @@ export function createPolicyAuthorizer(
         signal: controller.signal,
       });
       if (!response.ok) throw new PolicyServiceUnavailableError(`policy service returned HTTP ${response.status}`);
-      const decision = await response.json() as Partial<AuthorizationDecision> & { policy_id?: string };
-      if (typeof decision.allowed !== 'boolean' || typeof decision.reason !== 'string') {
+      const decision = await response.json() as Partial<AuthorizationDecisionWire>;
+      if (
+        typeof decision.allowed !== 'boolean'
+        || typeof decision.reason !== 'string'
+        || (typeof decision.policy_id !== 'string' && decision.policy_id !== null)
+      ) {
         throw new PolicyServiceUnavailableError('policy service returned an invalid decision');
       }
-      return { allowed: decision.allowed, reason: decision.reason, policyId: decision.policyId ?? decision.policy_id };
+      return { allowed: decision.allowed, reason: decision.reason, ...(decision.policy_id === null ? {} : { policyId: decision.policy_id }) };
     } catch (error) {
       if (error instanceof PolicyServiceUnavailableError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {

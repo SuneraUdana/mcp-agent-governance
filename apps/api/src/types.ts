@@ -36,6 +36,29 @@ export type AuditEvent = {
   rationale: string;
   metadata: Record<string, unknown>;
 };
-export type Policy = { id: string; name: string; effect: 'allow' | 'deny'; toolIds?: string[] };
+/** Internal/public API shape; the policy-service adapter maps this to snake_case wire JSON. */
+export type Policy = {
+  policyId: string;
+  effect: 'allow' | 'deny';
+  toolId: string;
+  actorId?: string | null;
+  action: string;
+  reason: string;
+  version: number;
+};
+export type PolicyWire = {
+  policy_id: string;
+  effect: 'allow' | 'deny';
+  tool_id: string;
+  actor_id?: string | null;
+  action: string;
+  reason: string;
+  version: number;
+};
 export type Tool = { id: string; name: string; mcpServer: string };
 export type AuthorizationDecision = { allowed: boolean; reason: string; policyId?: string };
+export type AuthorizationDecisionWire = {
+  allowed: boolean;
+  reason: string;
+  policy_id: string | null;
+};

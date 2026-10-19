@@ -19,7 +19,42 @@ test('policy client sends the service bearer token', async () => {
       toolId: 'tool-1',
     });
     assert.deepEqual(decision, { allowed: true, reason: 'allowed', policyId: 'policy-1' });
+    assert.deepEqual(await request?.json(), {
+      actor_id: 'agent-1',
+      tool_id: 'tool-1',
+      action: 'invoke',
+      context: {},
+    });
     assert.equal(request?.headers.get('authorization'), 'Bearer service-secret');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('policy client maps a default-deny wire decision without accepting camelCase output', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    allowed: false,
+    reason: 'No matching policy',
+    policy_id: null,
+  }), { status: 200 });
+
+  try {
+    const decision = await createPolicyAuthorizer('http://policy.test')({
+      actorId: 'agent-1',
+      toolId: 'tool-1',
+    });
+    assert.deepEqual(decision, { allowed: false, reason: 'No matching policy' });
+
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      allowed: true,
+      reason: 'allowed',
+      policyId: 'camel-case-is-not-wire-contract',
+    }), { status: 200 });
+    await assert.rejects(
+      createPolicyAuthorizer('http://policy.test')({ actorId: 'agent-1', toolId: 'tool-1' }),
+      /invalid decision/,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

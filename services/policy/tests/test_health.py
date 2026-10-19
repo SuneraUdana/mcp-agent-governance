@@ -30,6 +30,21 @@ def test_default_deny():
         'policy_id': None,
     }
 
+def test_policy_contract_uses_snake_case_and_rejects_camel_case():
+    response = client.post('/v1/policies', headers=admin_headers, json={
+        'policyId': 'wrong-shape',
+        'effect': 'allow',
+        'toolId': 'weather',
+        'reason': 'wrong shape',
+    })
+    assert response.status_code == 422
+
+    response = client.post('/v1/authorize', headers=service_headers, json={
+        'actorId': 'a',
+        'toolId': 't',
+    })
+    assert response.status_code == 422
+
 def test_authorization_requires_service_token():
     assert client.post('/v1/authorize', json={'actor_id': 'a', 'tool_id': 't'}).status_code == 401
     assert client.post(

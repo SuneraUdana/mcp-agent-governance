@@ -44,3 +44,12 @@ The Fastify-to-policy authorization call uses a dedicated bearer token from
 `POLICY_SERVICE_TOKEN`. The policy service does not expose a generic audit
 ingestion endpoint; audit records are created by the Fastify API from
 validated internal events.
+
+## Policy contract
+
+The policy service owns a snake_case wire contract for policy rules and
+authorization requests/responses (`policy_id`, `actor_id`, `tool_id`, and
+`context`). Fastify's public API remains camelCase (`actorId`, `toolId`,
+`policyId`); `policy-client.ts` is the explicit transport adapter between
+those shapes. Responses always include `policy_id` as either a string or
+`null`, including default-deny decisions.
