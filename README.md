@@ -19,6 +19,7 @@ npm run build && npm test
 # configure the admin tokens in your shell (use long random values)
 export ADMIN_API_TOKEN='replace-with-a-long-random-admin-token'
 export POLICY_ADMIN_TOKEN='replace-with-a-long-random-policy-admin-token'
+export POLICY_SERVICE_TOKEN='replace-with-a-long-random-policy-service-token'
 # development fallback (explicit; no database required)
 AGENT_REPOSITORY=memory npm run dev:api
 # PostgreSQL-backed registry
@@ -41,6 +42,11 @@ uvicorn services.tool.app.main:app --reload --port 8010
 
 API health: `http://localhost:3000/health`; policy health: `http://localhost:8000/health`. Fastify `POST /v1/authorize` delegates to the policy service. It returns `503` when the policy service is unavailable and `504` on timeout. The policy service defaults to deny until a matching rule is configured.
 
+The policy service requires `Authorization: Bearer <POLICY_SERVICE_TOKEN>` on
+`POST /v1/authorize`; the API client sends this token from its environment.
+Keep it server-side and configure the same value for both processes. The
+policy service returns `503` when service authentication is not configured.
+
 Administrative registry and credential routes require
 `Authorization: Bearer $ADMIN_API_TOKEN`. Policy list/create routes require
 `Authorization: Bearer $POLICY_ADMIN_TOKEN`; both services fail closed with
@@ -59,7 +65,8 @@ Set `POLICY_REPOSITORY=postgres` with `DATABASE_URL` to persist policies in
 PostgreSQL; the migration order is `001` through `004`. The default
 `POLICY_REPOSITORY=memory` mode is process-local and can be seeded with
 `POLICY_RULES_JSON`. `POST /v1/policies` and `GET /v1/policies` support
-controlled demos; these administrative endpoints are not authenticated yet.
+controlled demos and require the policy admin token. There is no arbitrary
+policy-service audit endpoint; the Fastify API records audit events internally.
 Rules match exact tool/action values and optionally an exact actor. A
 specific actor match takes precedence over a wildcard actor match; within the
 same specificity, deny takes precedence over allow. Unmatched requests remain

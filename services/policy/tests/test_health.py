@@ -1,11 +1,13 @@
 import os
 os.environ["POLICY_ADMIN_TOKEN"] = "test-policy-admin"
+os.environ["POLICY_SERVICE_TOKEN"] = "test-policy-service"
 
 from fastapi.testclient import TestClient
 from app.main import app
 from app.main import policy_repository
 
 client = TestClient(app)
+service_headers = {"authorization": "Bearer test-policy-service"}
 admin_headers = {"authorization": "Bearer test-policy-admin"}
 policy_repository._rules.clear()
 
@@ -21,12 +23,20 @@ def test_policy_administration_requires_token():
     assert response.status_code == 200
 
 def test_default_deny():
-    response = client.post('/v1/authorize', json={'actor_id':'a','tool_id':'t'})
+    response = client.post('/v1/authorize', headers=service_headers, json={'actor_id':'a','tool_id':'t'})
     assert response.status_code == 200 and response.json() == {
         'allowed': False,
         'reason': 'No matching policy',
         'policy_id': None,
     }
+
+def test_authorization_requires_service_token():
+    assert client.post('/v1/authorize', json={'actor_id': 'a', 'tool_id': 't'}).status_code == 401
+    assert client.post(
+        '/v1/authorize',
+        headers={"authorization": "Bearer wrong-token"},
+        json={'actor_id': 'a', 'tool_id': 't'},
+    ).status_code == 401
 
 def test_policy_allows_matching_actor_and_tool_but_denies_other_actor():
     created = client.post('/v1/policies', headers=admin_headers, json={
@@ -39,10 +49,10 @@ def test_policy_allows_matching_actor_and_tool_but_denies_other_actor():
     })
     assert created.status_code == 201
 
-    allowed = client.post('/v1/authorize', json={
+    allowed = client.post('/v1/authorize', headers=service_headers, json={
         'actor_id': 'agent-2', 'tool_id': 'weather', 'action': 'invoke',
     })
-    denied = client.post('/v1/authorize', json={
+    denied = client.post('/v1/authorize', headers=service_headers, json={
         'actor_id': 'agent-3', 'tool_id': 'weather', 'action': 'invoke',
     })
     assert allowed.json() == {
@@ -69,7 +79,10 @@ def test_specific_deny_precedes_specific_allow():
         'action': 'invoke',
         'reason': 'deny',
     })
-    decision = client.post('/v1/authorize', json={
+    decision = client.post('/v1/authorize', headers=service_headers, json={
         'actor_id': 'agent-3', 'tool_id': 'restricted', 'action': 'invoke',
     })
     assert decision.json()['allowed'] is False
+
+def test_arbitrary_audit_endpoint_is_removed():
+    assert client.post('/v1/audit', json={'anything': 'accepted'}).status_code == 404

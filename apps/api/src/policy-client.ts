@@ -15,6 +15,7 @@ export class PolicyServiceTimeoutError extends Error {}
 export function createPolicyAuthorizer(
   baseUrl = process.env.POLICY_SERVICE_URL ?? 'http://localhost:8000',
   timeoutMs = Number(process.env.POLICY_SERVICE_TIMEOUT_MS ?? 2000),
+  serviceToken = process.env.POLICY_SERVICE_TOKEN,
 ): PolicyAuthorizer {
   return async (request) => {
     const controller = new AbortController();
@@ -22,7 +23,10 @@ export function createPolicyAuthorizer(
     try {
       const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/authorize`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...(serviceToken ? { authorization: 'Bearer ' + serviceToken } : {}),
+        },
         body: JSON.stringify({
           actor_id: request.actorId,
           tool_id: request.toolId,

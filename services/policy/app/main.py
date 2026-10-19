@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 import json
 import os
 from typing import Any
@@ -48,12 +47,20 @@ def require_admin_token(authorization: str | None = Header(default=None)) -> Non
         raise HTTPException(status_code=401, detail="valid administrative bearer token is required")
 
 
+def require_service_token(authorization: str | None = Header(default=None)) -> None:
+    configured_token = os.getenv("POLICY_SERVICE_TOKEN")
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="policy service authentication is not configured")
+    if authorization != "Bearer " + configured_token:
+        raise HTTPException(status_code=401, detail="valid service bearer token is required")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "policy"}
 
 
-@app.post("/v1/authorize", response_model=AuthorizationDecision)
+@app.post("/v1/authorize", response_model=AuthorizationDecision, dependencies=[Depends(require_service_token)])
 def authorize(request: AuthorizationRequest) -> AuthorizationDecision:
     rule = policy_repository.authorize(request.actor_id, request.tool_id, request.action)
     if not rule:
@@ -75,8 +82,3 @@ def create_policy(rule: PolicyRule) -> PolicyRule:
     if policy_repository.get(rule.policy_id):
         raise HTTPException(status_code=409, detail="policy already exists")
     return policy_repository.create(rule)
-
-
-@app.post("/v1/audit")
-def audit(event: dict[str, Any]) -> dict[str, Any]:
-    return {"accepted": True, "receivedAt": datetime.now(timezone.utc).isoformat(), "event": event}

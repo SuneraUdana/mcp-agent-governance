@@ -32,7 +32,7 @@ The MVP evaluates whether the platform can:
 | Boundary | Responsibility | Evaluation |
 | --- | --- | --- |
 | Fastify API | Public API, registry lifecycle, credential checks, MCP boundary, audit writes | Implemented and covered by API tests |
-| FastAPI policy service | Authorization decision contract | Implemented with secure default-deny behavior |
+| FastAPI policy service | Authenticated authorization decision contract | Implemented with service-token authentication and secure default-deny behavior |
 | PostgreSQL | Durable agents, credentials, policies, and audit events | Migrations and repository paths implemented |
 | Redis | Provisioned infrastructure for a future cache/use case | Not used by the current vertical slice |
 | Shared JSON Schema | Cross-service domain contract | Parses successfully and reflects current credential/audit shapes |
@@ -67,14 +67,16 @@ policy service suite contains two tests for health and default-deny behavior.
 - Protected invocation rejects malformed, expired, revoked, misbound, and
   insufficiently scoped credentials.
 - The policy service defaults to deny when no policy is configured.
+- Policy authorization requires a dedicated service bearer token.
+- The policy service does not accept arbitrary audit event submissions.
 - Audit metadata excludes plaintext credentials.
 - Correlation IDs are accepted from the request with a bounded length, or
   generated when absent.
 
 ### Remaining risks
 
-- Administrative endpoints are not protected by an administrator identity or
-  role model.
+- Administrative endpoints use shared bearer tokens, not an administrator
+  identity or role model.
 - Memory policy rules are process-local. PostgreSQL mode persists active rules
   with version and status fields; unmatched requests remain denied.
 - Constant-time secret comparison should be used for production-grade

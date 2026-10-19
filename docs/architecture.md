@@ -13,7 +13,7 @@ Fastify API (:3000)
           |
           v
     FastAPI policy service (:8000)
-      `-- Default-deny authorization
+      `-- Authenticated default-deny authorization
 
 PostgreSQL (:5432) and Redis (:6379) are provisioned for the next
 persistence and caching increment.
@@ -39,3 +39,8 @@ The initial domain entities are:
 The registry and policy decisions are intentionally in-memory/default-deny in
 this slice. Persistence, credential resolution, MCP transport, and a real
 policy evaluator should be added behind the existing boundaries.
+
+The Fastify-to-policy authorization call uses a dedicated bearer token from
+`POLICY_SERVICE_TOKEN`. The policy service does not expose a generic audit
+ingestion endpoint; audit records are created by the Fastify API from
+validated internal events.
