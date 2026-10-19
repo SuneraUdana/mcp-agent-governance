@@ -4,7 +4,7 @@ import os
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from .main_types import AuthorizationDecision, AuthorizationRequest, PolicyRule
-from .repository import MemoryPolicyRepository, PolicyRepository, create_policy_repository
+from .repository import MemoryPolicyRepository, PolicyConflictError, PolicyRepository, create_policy_repository
 
 app = FastAPI(title="MCP Policy Service", version="0.2.0")
 
@@ -66,4 +66,7 @@ def list_policies() -> list[PolicyRule]:
 def create_policy(rule: PolicyRule) -> PolicyRule:
     if policy_repository.get(rule.policy_id):
         raise HTTPException(status_code=409, detail="policy already exists")
-    return policy_repository.create(rule)
+    try:
+        return policy_repository.create(rule)
+    except PolicyConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error

@@ -143,8 +143,9 @@ The boundary executes a configurable HTTP tool transport after credential and
 policy checks. Set `MCP_TOOL_URL` to an external MCP-compatible gateway
 endpoint; the request body contains `toolId`, `action`, `payload`, and
 `correlationId`. The response JSON becomes the tool result. If unset, the API
-uses a deterministic local adapter for development. Both policy denials and
-downstream tool failures are audited.
+uses a deterministic local adapter for development. Blank, whitespace-only, and
+overlong correlation IDs are replaced with generated IDs. Both policy denials
+and downstream tool failures are audited.
 
 Seed a complete demo flow after starting the API and policy service:
 

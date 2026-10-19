@@ -1,10 +1,14 @@
 import os
+from types import SimpleNamespace
+import pytest
 os.environ["POLICY_ADMIN_TOKEN"] = "test-policy-admin"
 os.environ["POLICY_SERVICE_TOKEN"] = "test-policy-service"
 
 from fastapi.testclient import TestClient
 from app.main import app
 from app.main import policy_repository
+from app.repository import PolicyConflictError, PostgresPolicyRepository
+from app.main_types import PolicyRule
 
 client = TestClient(app)
 service_headers = {"authorization": "Bearer test-policy-service"}
@@ -101,3 +105,58 @@ def test_specific_deny_precedes_specific_allow():
 
 def test_arbitrary_audit_endpoint_is_removed():
     assert client.post('/v1/audit', json={'anything': 'accepted'}).status_code == 404
+
+def test_concurrent_policy_conflicts_return_409(monkeypatch):
+    class ConflictingRepository:
+        def get(self, policy_id):
+            return None
+
+        def create(self, rule):
+            raise PolicyConflictError("policy already exists")
+
+    monkeypatch.setattr("app.main.policy_repository", ConflictingRepository())
+    response = client.post('/v1/policies', headers=admin_headers, json={
+        'policy_id': 'race-policy',
+        'effect': 'allow',
+        'tool_id': 'weather',
+        'reason': 'race',
+    })
+    assert response.status_code == 409
+    assert response.json()['detail'] == 'policy already exists'
+
+def test_postgres_unique_violation_is_translated_and_rolled_back():
+    class UniqueViolation(Exception):
+        pass
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            raise UniqueViolation("duplicate key")
+
+    class Connection:
+        rolled_back = False
+
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            self.rolled_back = True
+
+    repository = object.__new__(PostgresPolicyRepository)
+    connection = Connection()
+    repository._connection = connection
+    repository._psycopg = SimpleNamespace(errors=SimpleNamespace(UniqueViolation=UniqueViolation))
+
+    with pytest.raises(PolicyConflictError, match="policy already exists"):
+        repository.create(PolicyRule(
+            policy_id="race-policy",
+            effect="allow",
+            tool_id="weather",
+            reason="race",
+        ))
+    assert connection.rolled_back is True

@@ -139,7 +139,12 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
           payload: request.body.payload ?? {},
           correlationId: correlation,
         });
-        await audit.record({ correlationId: correlation, eventType: 'tool_invocation', actorId: request.body.agentId, agentId: request.body.agentId, toolId: request.body.toolId, credentialId: request.body.credentialId, allowed: true, rationale: 'Policy authorized and tool executed', metadata: { policyId: decision.policyId } });
+        try {
+          await audit.record({ correlationId: correlation, eventType: 'tool_invocation', actorId: request.body.agentId, agentId: request.body.agentId, toolId: request.body.toolId, credentialId: request.body.credentialId, allowed: true, rationale: 'Policy authorized and tool executed', metadata: { policyId: decision.policyId } });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : 'audit recording failed';
+          return reply.code(500).send({ error: 'tool executed but audit recording failed', reason, correlationId: correlation, toolExecuted: true });
+        }
         return reply.send({ accepted: true, correlationId: correlation, decision, result });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'tool invocation failed';
@@ -173,7 +178,7 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
 }
 
 function correlationId(value: string | string[] | undefined): string {
-  return typeof value === 'string' && value.length <= 128 ? value : randomUUID();
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 128 ? value : randomUUID();
 }
 
 function handleRegistryError(error: unknown, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): unknown {

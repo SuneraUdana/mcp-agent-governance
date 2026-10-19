@@ -166,6 +166,26 @@ test('protected MCP invocation validates credential scope and records correlatio
   await app.close();
 });
 
+test('empty or overlong correlation IDs are replaced', async () => {
+  const agents = new MemoryAgentRepository();
+  await agents.create({ id: 'agent-correlation', name: 'Correlation Agent', ownerId: 'owner-1', purpose: 'correlation test', riskTier: 'low' });
+  const credentials = new MemoryCredentialRepository(agents);
+  const issued = await credentials.issue({ agentId: 'agent-correlation', scope: ['tool:weather'], ttlSeconds: 60 });
+  const app = buildApp(agents, async () => ({ allowed: true, reason: 'allowed' }), credentials, new MemoryAuditRepository(), undefined, 'test-admin');
+  for (const value of ['   ', 'x'.repeat(129)]) {
+    const response = await app.inject({
+      method: 'POST', url: '/v1/mcp/invoke',
+      headers: { authorization: `Bearer ${issued.secret}`, 'x-correlation-id': value },
+      payload: { agentId: 'agent-correlation', toolId: 'weather', credentialId: issued.id },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.notEqual(response.json().correlationId, value);
+    assert.ok(response.json().correlationId.trim().length > 0);
+    assert.ok(response.json().correlationId.length <= 128);
+  }
+  await app.close();
+});
+
 test('MCP invocation records policy denial and rejects expired credentials', async () => {
   const agents = new MemoryAgentRepository();
   await agents.create({ id: 'agent-deny', name: 'Denied Agent', ownerId: 'owner-1', purpose: 'deny test', riskTier: 'low' });
@@ -192,6 +212,41 @@ test('MCP invocation records policy denial and rejects expired credentials', asy
   });
   assert.equal(expiredResponse.statusCode, 401);
   await expiredApp.close();
+});
+
+test('tool execution is reported when its success audit write fails', async () => {
+  const agents = new MemoryAgentRepository();
+  await agents.create({ id: 'agent-audit-error', name: 'Audit Error Agent', ownerId: 'owner-1', purpose: 'audit test', riskTier: 'low' });
+  const credentials = new MemoryCredentialRepository(agents);
+  const issued = await credentials.issue({ agentId: 'agent-audit-error', scope: ['tool:weather'], ttlSeconds: 60 });
+  let toolCalls = 0;
+  const audit = {
+    async record(event: Parameters<MemoryAuditRepository['record']>[0]) {
+      if (event.eventType === 'tool_invocation' && event.allowed === true) throw new Error('audit store unavailable');
+      return new MemoryAuditRepository().record(event);
+    },
+    async list() { return []; },
+  };
+  const app = buildApp(
+    agents,
+    async () => ({ allowed: true, reason: 'allowed', policyId: 'allow-tool' }),
+    credentials,
+    audit,
+    async () => {
+      toolCalls += 1;
+      return { toolId: 'weather', output: { accepted: true } };
+    },
+  );
+  const response = await app.inject({
+    method: 'POST', url: '/v1/mcp/invoke',
+    headers: { authorization: `Bearer ${issued.secret}`, 'x-correlation-id': 'audit-error-1' },
+    payload: { agentId: 'agent-audit-error', toolId: 'weather', credentialId: issued.id },
+  });
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.json().error, 'tool executed but audit recording failed');
+  assert.equal(response.json().toolExecuted, true);
+  assert.equal(toolCalls, 1);
+  await app.close();
 });
 
 test('MCP invocation audits tool adapter failures and does not hide the error', async () => {

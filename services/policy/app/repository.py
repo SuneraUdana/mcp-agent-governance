@@ -6,6 +6,10 @@ from typing import Protocol
 from .main_types import PolicyRule
 
 
+class PolicyConflictError(Exception):
+    """Raised when a policy cannot be created because its identity already exists."""
+
+
 class PolicyRepository(Protocol):
     def list(self) -> list[PolicyRule]: ...
     def get(self, policy_id: str) -> PolicyRule | None: ...
@@ -77,15 +81,19 @@ class PostgresPolicyRepository:
             return PolicyRule.model_validate(row) if row else None
 
     def create(self, rule: PolicyRule) -> PolicyRule:
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO policies "
-                "(policy_id, effect, tool_id, actor_id, action, reason, version) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (rule.policy_id, rule.effect, rule.tool_id, rule.actor_id,
-                 rule.action, rule.reason, rule.version),
-            )
-        self._connection.commit()
+        try:
+            with self._connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO policies "
+                    "(policy_id, effect, tool_id, actor_id, action, reason, version) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (rule.policy_id, rule.effect, rule.tool_id, rule.actor_id,
+                     rule.action, rule.reason, rule.version),
+                )
+            self._connection.commit()
+        except self._psycopg.errors.UniqueViolation as error:
+            self._connection.rollback()
+            raise PolicyConflictError("policy already exists") from error
         return rule
 
     def authorize(self, actor_id: str, tool_id: str, action: str) -> PolicyRule | None:
