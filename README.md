@@ -5,7 +5,7 @@ A deliberately small hybrid monorepo foundation: Fastify owns the public API and
 ## Layout
 - `apps/api`: TypeScript Fastify API, agent registry with PostgreSQL and explicit memory fallback, OpenAPI at `/docs`.
 - `services/policy`: Python FastAPI policy boundary with explicit in-memory policy rules and secure default-deny.
-- `services/tool`: deterministic external HTTP tool used by the local showcase.
+- `services/tool`: deterministic Streamable HTTP MCP server used by the local showcase.
 - `demo/gradio_app.py`: Gradio client for the governed invocation flow.
 - `packages/contracts/schemas/domain.json`: shared source-of-truth JSON Schema for domain contracts.
 - `infra/docker-compose.yml`: PostgreSQL and Redis.
@@ -139,11 +139,15 @@ curl -X POST http://localhost:3000/v1/mcp/invoke \
   -d '{"agentId":"agent-2","toolId":"example-tool","credentialId":"<credential-id>"}'
 ```
 
-The boundary executes a configurable HTTP tool transport after credential and
-policy checks. Set `MCP_TOOL_URL` to an external MCP-compatible gateway
-endpoint; the request body contains `toolId`, `action`, `payload`, and
-`correlationId`. The response JSON becomes the tool result. If unset, the API
-uses a deterministic local adapter for development. Blank, whitespace-only, and
+The boundary executes a configurable Streamable HTTP MCP transport after
+credential and policy checks. Set `MCP_TOOL_URL` to an MCP endpoint (the demo
+uses `http://localhost:8010/mcp`). The API negotiates one MCP session with
+`initialize`, sends `notifications/initialized`, and invokes the selected tool
+with `tools/call`; the invocation is mapped to the tool name and arguments
+(`action`, payload fields, and `correlationId`). JSON-RPC errors, malformed
+responses, session loss, and timeouts are returned as explicit downstream
+failures. If unset, the API uses a deterministic local adapter for development.
+Blank, whitespace-only, and
 overlong correlation IDs are replaced with generated IDs. Both policy denials
 and downstream tool failures are audited.
 
@@ -159,7 +163,7 @@ secret is printed once; treat the output as sensitive and revoke the
 credential after the demo.
 
 For the browser showcase, start the API with
-`MCP_TOOL_URL=http://localhost:8010/v1/tools/invoke`, run the seed command,
+`MCP_TOOL_URL=http://localhost:8010/mcp`, run the seed command,
 then install the demo dependency and launch Gradio:
 
 ```sh

@@ -37,8 +37,13 @@ The initial domain entities are:
 - **AuditEvent**: an immutable record of an authorization or tool action.
 
 The registry and policy decisions are intentionally in-memory/default-deny in
-this slice. Persistence, credential resolution, MCP transport, and a real
-policy evaluator should be added behind the existing boundaries.
+this slice. The external tool boundary uses a minimal Streamable HTTP MCP
+client behind `ToolAdapter`: it negotiates a session with `initialize`, sends
+the initialization notification, then calls `tools/call`. The adapter retains
+the session, retries once after a session-invalidating `400`/`404`, and
+normalizes protocol, malformed-response, timeout, and transport failures into
+explicit tool errors. The local adapter remains deterministic and bypasses
+network transport.
 
 The Fastify-to-policy authorization call uses a dedicated bearer token from
 `POLICY_SERVICE_TOKEN`. The policy service does not expose a generic audit

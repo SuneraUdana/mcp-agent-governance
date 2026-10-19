@@ -136,7 +136,7 @@ and can be applied independently. The remaining operational gaps are:
 ## Recommended next research
 
 1. Protect policy administration with an authenticated owner/admin boundary.
-2. Replace the demo HTTP adapter with a standards-complete MCP transport and
+2. Expand the minimal MCP transport toward full capability discovery and
    measure end-to-end tool latency.
 3. Add administrator authentication, rate limiting, constant-time comparisons,
    key rotation, and owner identity validation.
