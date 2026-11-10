@@ -22,6 +22,80 @@ test('administrative routes reject missing and invalid tokens', async () => {
   await app.close();
 });
 
+test('dashboard overview and audit endpoints are authenticated and read-only', async () => {
+  const agents = new MemoryAgentRepository();
+  const audit = new MemoryAuditRepository();
+  await agents.create({ id: 'dashboard-agent', name: 'Dashboard Agent', ownerId: 'owner-1', purpose: 'overview test', riskTier: 'high' });
+  await audit.record({
+    correlationId: 'dashboard-1',
+    eventType: 'authorization',
+    agentId: 'dashboard-agent',
+    allowed: false,
+    rationale: 'policy denied',
+    metadata: { policyId: 'policy-1', token: 'must-not-leak' },
+  });
+
+  await audit.record({
+    correlationId: 'dashboard-2',
+    eventType: 'tool_invocation',
+    agentId: 'dashboard-agent',
+    allowed: true,
+    rationale: 'allowed',
+    metadata: { credentialSecret: 'must-not-leak' },
+  });
+  const app = buildApp(agents, undefined, undefined, audit, undefined, 'test-admin');
+  assert.equal((await app.inject('/v1/dashboard/summary')).statusCode, 401);
+  const summary = await app.inject({ method: 'GET', url: '/v1/dashboard/summary', headers: adminHeaders });
+  assert.equal(summary.statusCode, 200);
+  assert.deepEqual(summary.json().agents, {
+    total: 1,
+    active: 1,
+    disabled: 0,
+    byRiskTier: { low: 0, medium: 0, high: 1 },
+  });
+  assert.equal(summary.json().audit.total, 2);
+  assert.equal(summary.json().audit.allowed, 1);
+  assert.equal(summary.json().audit.denied, 1);
+  assert.equal(summary.json().recentEvents.some((event: { metadata: Record<string, unknown> }) => event.metadata.credentialSecret === '[REDACTED]'), true);
+  const filtered = await app.inject({ method: 'GET', url: '/v1/audit?eventType=authorization&limit=1', headers: adminHeaders });
+  assert.equal(filtered.statusCode, 200);
+  assert.equal(filtered.json().events.length, 1);
+  assert.equal(filtered.json().total, 1);
+  assert.equal(filtered.json().events[0].metadata.token, '[REDACTED]');
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/audit?limit=0', headers: adminHeaders })).statusCode, 400);
+  await app.close();
+});
+
+test('operator read models expose identity, correlated audit filters, policies, simulation, and health', async () => {
+  const agents = new MemoryAgentRepository();
+  const audit = new MemoryAuditRepository();
+  await agents.create({ id: 'operator-agent', name: 'Operator Agent', ownerId: 'owner-1', purpose: 'operator test', riskTier: 'medium', identityMetadata: { provider: 'demo', subject: 'sub-1' } });
+  await audit.record({ correlationId: 'corr-match', eventType: 'authorization', agentId: 'operator-agent', toolId: 'weather', allowed: true, rationale: 'matched policy', metadata: {} });
+  await audit.record({ correlationId: 'corr-other', eventType: 'tool_invocation', agentId: 'other-agent', toolId: 'email', allowed: false, rationale: 'denied', metadata: {} });
+  const app = buildApp(
+    agents,
+    async () => ({ allowed: true, reason: 'matched policy', policyId: 'policy-weather' }),
+    undefined,
+    audit,
+    undefined,
+    'test-admin',
+    { listPolicies: async () => [{ policyId: 'policy-weather', effect: 'allow', toolId: 'weather', actorId: 'operator-agent', action: 'invoke', reason: 'approved', version: 3 }], health: async () => ({ status: 'ok' }) },
+  );
+  const detail = await app.inject({ method: 'GET', url: '/v1/dashboard/agents/operator-agent', headers: adminHeaders });
+  assert.equal(detail.statusCode, 200);
+  assert.deepEqual(detail.json().agent.identityMetadata, { provider: 'demo', subject: 'sub-1' });
+  assert.equal(detail.json().auditTimeline[0].correlationId, 'corr-match');
+  assert.equal(detail.json().policies[0].version, 3);
+  const filtered = await app.inject({ method: 'GET', url: '/v1/audit?agentId=operator-agent&toolId=weather&decision=allowed&correlationId=corr-match', headers: adminHeaders });
+  assert.equal(filtered.statusCode, 200);
+  assert.equal(filtered.json().total, 1);
+  const simulation = await app.inject({ method: 'POST', url: '/v1/policies/simulate', headers: { ...adminHeaders, 'content-type': 'application/json' }, payload: { actorId: 'operator-agent', toolId: 'weather' } });
+  assert.equal(simulation.statusCode, 200);
+  assert.match(simulation.json().explanation, /Allowed/);
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/dashboard/health', headers: adminHeaders })).json().policy, { status: 'ok' });
+  await app.close();
+});
+
 test('agent registry supports lifecycle and expiry rules', async () => {
   const agents = new MemoryAgentRepository();
   const app = buildApp(agents, undefined, new MemoryCredentialRepository(agents), new MemoryAuditRepository(), undefined, 'test-admin');
@@ -45,6 +119,24 @@ test('duplicate agents and invalid risk tiers are rejected', async () => {
   assert.equal((await app.inject({ method: 'POST', url: '/v1/agents', headers: adminHeaders, payload })).statusCode, 201);
   assert.equal((await app.inject({ method: 'POST', url: '/v1/agents', headers: adminHeaders, payload })).statusCode, 409);
   assert.equal((await app.inject({ method: 'POST', url: '/v1/agents', headers: adminHeaders, payload: { ...payload, id: 'a2', riskTier: 'critical' } })).statusCode, 400);
+  await app.close();
+});
+
+test('public API routes reject malformed JSON body types before handlers run', async () => {
+  const agents = new MemoryAgentRepository();
+  const credentials = new MemoryCredentialRepository(agents);
+  const app = buildApp(agents, undefined, credentials, new MemoryAuditRepository(), undefined, 'test-admin');
+  const cases = [
+    { method: 'POST' as const, url: '/v1/agents', payload: 'null' },
+    { method: 'PUT' as const, url: '/v1/agents/a1', payload: JSON.stringify({ name: ['not-a-string'] }) },
+    { method: 'POST' as const, url: '/v1/agents/a1/credentials', payload: JSON.stringify({ scope: 'not-an-array' }) },
+    { method: 'POST' as const, url: '/v1/mcp/invoke', payload: JSON.stringify({ agentId: {}, toolId: 'demo-tool', credentialId: 'credential' }) },
+    { method: 'POST' as const, url: '/v1/authorize', payload: JSON.stringify({ actorId: 'agent', toolId: 42 }) },
+  ];
+  for (const request of cases) {
+    const headers = request.url.startsWith('/v1/authorize') ? { 'content-type': 'application/json' } : { ...adminHeaders, 'content-type': 'application/json' };
+    assert.equal((await app.inject({ ...request, headers })).statusCode, 400, request.url);
+  }
   await app.close();
 });
 
@@ -148,6 +240,26 @@ test('protected MCP invocation validates credential scope and records correlatio
   await app.close();
 });
 
+test('empty or overlong correlation IDs are replaced', async () => {
+  const agents = new MemoryAgentRepository();
+  await agents.create({ id: 'agent-correlation', name: 'Correlation Agent', ownerId: 'owner-1', purpose: 'correlation test', riskTier: 'low' });
+  const credentials = new MemoryCredentialRepository(agents);
+  const issued = await credentials.issue({ agentId: 'agent-correlation', scope: ['tool:weather'], ttlSeconds: 60 });
+  const app = buildApp(agents, async () => ({ allowed: true, reason: 'allowed' }), credentials, new MemoryAuditRepository(), undefined, 'test-admin');
+  for (const value of ['   ', 'x'.repeat(129)]) {
+    const response = await app.inject({
+      method: 'POST', url: '/v1/mcp/invoke',
+      headers: { authorization: `Bearer ${issued.secret}`, 'x-correlation-id': value },
+      payload: { agentId: 'agent-correlation', toolId: 'weather', credentialId: issued.id },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.notEqual(response.json().correlationId, value);
+    assert.ok(response.json().correlationId.trim().length > 0);
+    assert.ok(response.json().correlationId.length <= 128);
+  }
+  await app.close();
+});
+
 test('MCP invocation records policy denial and rejects expired credentials', async () => {
   const agents = new MemoryAgentRepository();
   await agents.create({ id: 'agent-deny', name: 'Denied Agent', ownerId: 'owner-1', purpose: 'deny test', riskTier: 'low' });
@@ -174,6 +286,41 @@ test('MCP invocation records policy denial and rejects expired credentials', asy
   });
   assert.equal(expiredResponse.statusCode, 401);
   await expiredApp.close();
+});
+
+test('tool execution is reported when its success audit write fails', async () => {
+  const agents = new MemoryAgentRepository();
+  await agents.create({ id: 'agent-audit-error', name: 'Audit Error Agent', ownerId: 'owner-1', purpose: 'audit test', riskTier: 'low' });
+  const credentials = new MemoryCredentialRepository(agents);
+  const issued = await credentials.issue({ agentId: 'agent-audit-error', scope: ['tool:weather'], ttlSeconds: 60 });
+  let toolCalls = 0;
+  const audit = {
+    async record(event: Parameters<MemoryAuditRepository['record']>[0]) {
+      if (event.eventType === 'tool_invocation' && event.allowed === true) throw new Error('audit store unavailable');
+      return new MemoryAuditRepository().record(event);
+    },
+    async list() { return []; },
+  };
+  const app = buildApp(
+    agents,
+    async () => ({ allowed: true, reason: 'allowed', policyId: 'allow-tool' }),
+    credentials,
+    audit,
+    async () => {
+      toolCalls += 1;
+      return { toolId: 'weather', output: { accepted: true } };
+    },
+  );
+  const response = await app.inject({
+    method: 'POST', url: '/v1/mcp/invoke',
+    headers: { authorization: `Bearer ${issued.secret}`, 'x-correlation-id': 'audit-error-1' },
+    payload: { agentId: 'agent-audit-error', toolId: 'weather', credentialId: issued.id },
+  });
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.json().error, 'tool executed but audit recording failed');
+  assert.equal(response.json().toolExecuted, true);
+  assert.equal(toolCalls, 1);
+  await app.close();
 });
 
 test('MCP invocation audits tool adapter failures and does not hide the error', async () => {

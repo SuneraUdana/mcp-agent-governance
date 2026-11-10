@@ -18,6 +18,12 @@ export function validateAgentInput(input: AgentInput | Omit<AgentInput, 'id'>): 
   if (!input.purpose?.trim() || input.purpose.trim().length > 1000) throw new AgentValidationError('purpose is required and must be at most 1000 characters');
   if (!['low', 'medium', 'high'].includes(input.riskTier)) throw new AgentValidationError('riskTier must be low, medium, or high');
   if (input.expiresAt && Number.isNaN(Date.parse(input.expiresAt))) throw new AgentValidationError('expiresAt must be a valid ISO-8601 timestamp');
+  if (input.identityMetadata) {
+    if (typeof input.identityMetadata !== 'object' || Object.keys(input.identityMetadata).length > 20) throw new AgentValidationError('identityMetadata must contain at most 20 entries');
+    for (const [key, value] of Object.entries(input.identityMetadata)) {
+      if (!key.trim() || key.length > 100 || !value.trim() || value.length > 500) throw new AgentValidationError('identityMetadata keys and values must be non-empty and bounded');
+    }
+  }
 }
 
 function statusForExpiry(expiresAt?: string): AgentStatus {

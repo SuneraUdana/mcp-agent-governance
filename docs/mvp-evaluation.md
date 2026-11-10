@@ -5,9 +5,9 @@
 The project is a **technically complete MVP prototype** for agent identity,
 short-lived credentials, configurable policy authorization, and audit boundaries. It is
 useful for local development, architecture demonstrations, and a Gradio
-showcase. It is **not production-ready** because a standards-complete MCP
-transport, production observability, rate limiting, and operational controls
-are not implemented yet.
+showcase. It is **not production-ready** because administrative
+authentication, persisted policy storage, a standards-complete MCP transport,
+production observability are not implemented yet.
 
 This assessment is based on the repository state after the initial vertical
 slices and the validation and benchmark commands documented below.
@@ -32,8 +32,8 @@ The MVP evaluates whether the platform can:
 | Boundary | Responsibility | Evaluation |
 | --- | --- | --- |
 | Fastify API | Public API, registry lifecycle, credential checks, MCP boundary, audit writes | Implemented and covered by API tests |
-| FastAPI policy service | Authorization decision contract | Implemented with secure default-deny behavior |
-| PostgreSQL | Durable agents, credentials, policies, and audit events | Migrations and repository paths implemented and persistence smoke-tested |
+| FastAPI policy service | Authenticated authorization decision contract | Implemented with service-token authentication and secure default-deny behavior |
+| PostgreSQL | Durable agents, credentials, policies, and audit events | Migrations and repository paths implemented |
 | Redis | Provisioned infrastructure for a future cache/use case | Not used by the current vertical slice |
 | Shared JSON Schema | Cross-service domain contract | Parses successfully and reflects current credential/audit shapes |
 
@@ -51,11 +51,11 @@ scope checks happen before the protected MCP boundary requests authorization.
 | Credential enforcement | Expiry, revocation, wrong-agent binding, malformed bearer, and insufficient scope checks | Passed |
 | Authorization | Fastify-to-FastAPI mapping, decision normalization, timeout and unavailable-service handling | Passed |
 | Audit | Authorization, issuance, revocation, and invocation events with correlation ID and safe metadata | Passed |
-| Persistence | PostgreSQL migrations for agents, credentials, policies, and audit events; explicit memory fallback | Migration and restart-persistence validation passed |
+| Persistence | PostgreSQL migrations for agents, credentials, and audit events; explicit memory fallback | Migration validation passed |
 
-The API suite contains twelve focused tests, including security edge cases. The
-policy service suite contains five tests covering health, default-deny behavior,
-policy precedence, and administrative authentication.
+The API suite contains focused tests, including security edge cases. The policy
+service suite covers health, default-deny behavior, precedence, and
+administrative authentication.
 
 ## Security assessment
 
@@ -68,19 +68,20 @@ policy precedence, and administrative authentication.
 - Protected invocation rejects malformed, expired, revoked, misbound, and
   insufficiently scoped credentials.
 - The policy service defaults to deny when no policy is configured.
+- Policy authorization requires a dedicated service bearer token.
+- The policy service does not accept arbitrary audit event submissions.
 - Audit metadata excludes plaintext credentials.
 - Correlation IDs are accepted from the request with a bounded length, or
   generated when absent.
-- Administrative registry and credential routes require a configured bearer
-  token, and policy administration has a separate bearer token.
-- Credential hash verification uses a length-safe constant-time comparison.
 
 ### Remaining risks
 
-- Administrative authentication currently uses static bearer tokens rather than
-  a full identity provider, role model, or token rotation workflow.
+- Administrative endpoints use shared bearer tokens, not an administrator
+  identity or role model.
 - Memory policy rules are process-local. PostgreSQL mode persists active rules
   with version and status fields; unmatched requests remain denied.
+- Constant-time secret comparison should be used for production-grade
+  verification.
 - Rate limiting, abuse detection, key rotation, and owner identity
   verification are not implemented.
 - The in-memory repository is process-local and must not be used for
@@ -102,27 +103,15 @@ treated as capacity guarantees.
 | Integrated Fastify authorization | 1.84 ms | ~4,205 req/s |
 | Protected MCP governance boundary | 1.79 ms | ~4,285 req/s |
 
-The PostgreSQL-backed rerun used Docker PostgreSQL and Redis, migrations
-001–004, `AGENT_REPOSITORY=postgres`, 101 seeded agents, and the same 15-second
-duration with 10 connections:
+The protected MCP benchmark returned non-2xx responses because the policy
+service was intentionally default-deny. Credential validation completed before
+the policy denial, so this measures governance overhead rather than an actual
+tool call.
 
-| Operation | Average latency | P99 latency | Throughput | Result |
-| --- | ---: | ---: | ---: | --- |
-| `GET /health` | 0.01 ms | 0 ms | 29,838.94 req/s | 447,576 x 200 |
-| `GET /v1/agents` with 101 PostgreSQL agents | 5.47 ms | 10 ms | 1,675.47 req/s | 25,132 x 200 |
-| Credential issuance with PostgreSQL | 3.89 ms | 7 ms | 2,281.00 req/s | 34,209 x 201 |
-| Direct FastAPI authorization | 1.69 ms | 3 ms | 4,636.14 req/s | 69,532 x 200 |
-| Integrated Fastify authorization | 4.28 ms | 8 ms | 2,094.00 req/s | 31,404 x 200 |
-| Protected MCP governance boundary | 5.92 ms | 11 ms | 1,557.67 req/s | 23,365 x 200 |
-
-All corrected PostgreSQL benchmark scenarios completed with zero transport
-errors and zero timeouts. An initial protected-MCP attempt used malformed
-autocannon header syntax and produced 106,895 HTTP 400 responses; a direct
-`curl` request confirmed the application path, the command was corrected, and
-the final run above passed. Benchmark data, credentials, audit records,
-processes, and containers were removed afterward. These remain development
-single-machine measurements, not capacity guarantees; production evaluation
-should add database resource metrics and broader concurrent workloads.
+PostgreSQL-backed performance was not measured in the latest run because the
+Docker daemon was unavailable. A production evaluation must repeat the same
+scenarios with PostgreSQL enabled and record database resource usage, error
+rates, and latency percentiles.
 
 ## Reliability and operability
 
@@ -130,6 +119,7 @@ The API exposes health endpoints and maps policy-service failure to explicit
 `503` unavailable or `504` timeout responses. PostgreSQL migrations are ordered
 and can be applied independently. The remaining operational gaps are:
 
+- no CI workflow yet;
 - no metrics, tracing, or centralized structured-log sink;
 - no audit query or retention API;
 - no backup/restore or migration rollback procedure;
@@ -142,29 +132,36 @@ and can be applied independently. The remaining operational gaps are:
 | --- | --- | --- |
 | Local prototype | **Ready** | Core flows, tests, schema checks, and local startup are documented |
 | Demo/pilot evaluation | **Ready with limitations** | Suitable for a controlled showcase using non-production credentials |
-| Production deployment | **Not ready** | Missing standards-complete MCP integration, observability, rate limiting, token rotation, and operational controls |
+| Production deployment | **Not ready** | Shared bearer administration, standards-complete MCP integration, metrics/tracing, retention/tamper evidence, and operational controls remain |
 
 ## Recommended next research
 
-1. Replace the demo HTTP adapter with a standards-complete MCP transport and
+1. Replace shared bearer administration with an authenticated owner/admin boundary and scoped roles.
+2. Expand the minimal MCP transport toward full capability discovery and
    measure end-to-end tool latency.
-2. Add rate limiting, key rotation, and owner identity validation.
-3. Add authenticated audit search, retention, and tamper-evidence controls.
-4. Repeat benchmarks with PostgreSQL and realistic concurrent workloads.
-5. Add CI for TypeScript, Python, schema, migrations, dependency audits, and
+3. Add administrator authentication, rate limiting, constant-time comparisons,
+   key rotation, and owner identity validation.
+4. Add durable audit search, retention, tamper-evidence controls, and export governance.
+5. Repeat benchmarks with PostgreSQL and realistic concurrent workloads.
+6. Add CI for TypeScript, Python, schema, migrations, dependency audits, and
    security regression tests.
-6. Deploy the API over HTTPS before building the Gradio Space integration.
+7. Deploy the API over HTTPS before building the Gradio Space integration.
+
+The completed MVP intentionally defers WebSocket/SSE activity delivery, alert
+rules, policy authoring/version rollback, distributed tracing/metrics, and
+multi-tenant identity federation. The dashboard's activity and health views
+therefore remain honest read-only polling surfaces over real API and
+dependency responses.
 
 ## Reproduction commands
 
 ```sh
 npm run build
 npm test
-(cd services/policy && python3 -m pytest -q tests)
-(cd services/tool && python3 -m pytest -q tests)
+python3 -m pytest -q services/policy/tests
+cd services/tool && PYTHONPATH=. python3 -m pytest -q tests
 python3 -m json.tool packages/contracts/schemas/domain.json >/dev/null
 docker compose -f infra/docker-compose.yml config >/dev/null
-npm audit --omit=dev --audit-level=high
 ```
 
 For the complete local startup and API walkthrough, see the

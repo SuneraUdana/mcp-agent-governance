@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS agents (
   owner_id TEXT NOT NULL CHECK (char_length(owner_id) BETWEEN 1 AND 100),
   purpose TEXT NOT NULL CHECK (char_length(purpose) BETWEEN 1 AND 1000),
   risk_tier TEXT NOT NULL CHECK (risk_tier IN ('low', 'medium', 'high')),
+  identity_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

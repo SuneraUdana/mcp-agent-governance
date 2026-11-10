@@ -1,28 +1,12 @@
-from datetime import datetime, timezone
 import json
 import os
-from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
 
-from .main_types import PolicyRule
-from .repository import MemoryPolicyRepository, PolicyRepository, create_policy_repository
+from .main_types import AuthorizationDecision, AuthorizationRequest, PolicyRule
+from .repository import MemoryPolicyRepository, PolicyConflictError, PolicyRepository, create_policy_repository
 
 app = FastAPI(title="MCP Policy Service", version="0.2.0")
-
-
-class AuthorizationRequest(BaseModel):
-    actor_id: str
-    tool_id: str
-    action: str = "invoke"
-    context: dict[str, Any] = Field(default_factory=dict)
-
-
-class AuthorizationDecision(BaseModel):
-    allowed: bool
-    reason: str
-    policy_id: str | None = None
 
 
 def configured_repository() -> PolicyRepository:
@@ -48,12 +32,20 @@ def require_admin_token(authorization: str | None = Header(default=None)) -> Non
         raise HTTPException(status_code=401, detail="valid administrative bearer token is required")
 
 
+def require_service_token(authorization: str | None = Header(default=None)) -> None:
+    configured_token = os.getenv("POLICY_SERVICE_TOKEN")
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="policy service authentication is not configured")
+    if authorization != "Bearer " + configured_token:
+        raise HTTPException(status_code=401, detail="valid service bearer token is required")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "policy"}
 
 
-@app.post("/v1/authorize", response_model=AuthorizationDecision)
+@app.post("/v1/authorize", response_model=AuthorizationDecision, dependencies=[Depends(require_service_token)])
 def authorize(request: AuthorizationRequest) -> AuthorizationDecision:
     rule = policy_repository.authorize(request.actor_id, request.tool_id, request.action)
     if not rule:
@@ -74,9 +66,7 @@ def list_policies() -> list[PolicyRule]:
 def create_policy(rule: PolicyRule) -> PolicyRule:
     if policy_repository.get(rule.policy_id):
         raise HTTPException(status_code=409, detail="policy already exists")
-    return policy_repository.create(rule)
-
-
-@app.post("/v1/audit")
-def audit(event: dict[str, Any]) -> dict[str, Any]:
-    return {"accepted": True, "receivedAt": datetime.now(timezone.utc).isoformat(), "event": event}
+    try:
+        return policy_repository.create(rule)
+    except PolicyConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error

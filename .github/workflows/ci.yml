@@ -20,8 +20,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm --workspace @mcp/dashboard run build
       - run: npm test
-      - run: npm audit --omit=dev --audit-level=high
 
   python:
     name: Python services

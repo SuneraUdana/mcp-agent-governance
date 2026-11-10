@@ -5,8 +5,9 @@ A deliberately small hybrid monorepo foundation: Fastify owns the public API and
 ## Layout
 - `apps/api`: TypeScript Fastify API, agent registry with PostgreSQL and explicit memory fallback, OpenAPI at `/docs`.
 - `services/policy`: Python FastAPI policy boundary with explicit in-memory policy rules and secure default-deny.
-- `services/tool`: deterministic external HTTP tool used by the local showcase.
+- `services/tool`: deterministic Streamable HTTP MCP server used by the local showcase.
 - `demo/gradio_app.py`: Gradio client for the governed invocation flow.
+- `apps/dashboard`: React/Vite operator dashboard for read-only governance overview and audit activity.
 - `packages/contracts/schemas/domain.json`: shared source-of-truth JSON Schema for domain contracts.
 - `infra/docker-compose.yml`: PostgreSQL and Redis.
 - `docs/mvp-evaluation.md`: evidence-based scope, security, performance, and readiness assessment.
@@ -19,6 +20,7 @@ npm run build && npm test
 # configure the admin tokens in your shell (use long random values)
 export ADMIN_API_TOKEN='replace-with-a-long-random-admin-token'
 export POLICY_ADMIN_TOKEN='replace-with-a-long-random-policy-admin-token'
+export POLICY_SERVICE_TOKEN='replace-with-a-long-random-policy-service-token'
 # development fallback (explicit; no database required)
 AGENT_REPOSITORY=memory npm run dev:api
 # PostgreSQL-backed registry
@@ -27,6 +29,7 @@ psql "$DATABASE_URL" -f infra/migrations/001_create_agents.sql
 psql "$DATABASE_URL" -f infra/migrations/002_create_credentials.sql
 psql "$DATABASE_URL" -f infra/migrations/003_create_audit_events.sql
 psql "$DATABASE_URL" -f infra/migrations/004_create_policies.sql
+psql "$DATABASE_URL" -f infra/migrations/005_add_agent_identity_metadata.sql
 AGENT_REPOSITORY=postgres npm run dev:api
 python3 -m venv services/policy/.venv
 . services/policy/.venv/bin/activate
@@ -40,6 +43,32 @@ uvicorn services.tool.app.main:app --reload --port 8010
 ```
 
 API health: `http://localhost:3000/health`; policy health: `http://localhost:8000/health`. Fastify `POST /v1/authorize` delegates to the policy service. It returns `503` when the policy service is unavailable and `504` on timeout. The policy service defaults to deny until a matching rule is configured.
+
+## Operator dashboard
+
+The API exposes authenticated read-only operator routes:
+
+- `GET /v1/dashboard/summary`: agent status/risk counts, audit totals, and the latest ten safe audit events.
+- `GET /v1/dashboard/health`: API health plus a live policy-service health check.
+- `GET /v1/dashboard/agents` and `GET /v1/dashboard/agents/:id`: registry posture, identity metadata, correlated audit timeline, and matching policies.
+- `GET /v1/audit?limit=50&agentId=...&toolId=...&decision=allowed&correlationId=...&eventType=authorization&from=...&to=...`: authenticated audit explorer filters.
+- `GET /v1/policies`: policy listing with effect, target, version, status, and rationale metadata.
+- `POST /v1/policies/simulate`: authenticated policy simulation; the response includes the real decision and an explicit allow/deny explanation.
+
+Both routes require the same `ADMIN_API_TOKEN` bearer token as the registry routes. Start the API, then run the dashboard in another shell:
+
+```sh
+export ADMIN_API_TOKEN='replace-with-a-long-random-admin-token'
+export API_URL='http://localhost:3000'
+npm --workspace @mcp/dashboard run dev
+```
+
+Open `http://localhost:5173`. Vite proxies API requests and injects the token server-side; the token is never bundled into browser code. For a deployed dashboard, configure the hosting reverse proxy to authenticate `/v1/dashboard/*` and `/v1/audit` server-side rather than adding a token to frontend environment variables. The dashboard explicitly handles loading, empty, error, and dependency-unavailable states. It polls the authenticated API for current data; it does not pretend to provide WebSocket or SSE live updates.
+
+The policy service requires `Authorization: Bearer <POLICY_SERVICE_TOKEN>` on
+`POST /v1/authorize`; the API client sends this token from its environment.
+Keep it server-side and configure the same value for both processes. The
+policy service returns `503` when service authentication is not configured.
 
 Administrative registry and credential routes require
 `Authorization: Bearer $ADMIN_API_TOKEN`. Policy list/create routes require
@@ -56,10 +85,11 @@ uvicorn services.policy.app.main:app --reload --port 8000
 ```
 
 Set `POLICY_REPOSITORY=postgres` with `DATABASE_URL` to persist policies in
-PostgreSQL; the migration order is `001` through `004`. The default
+PostgreSQL; the migration order is `001` through `005`. The default
 `POLICY_REPOSITORY=memory` mode is process-local and can be seeded with
 `POLICY_RULES_JSON`. `POST /v1/policies` and `GET /v1/policies` support
-controlled demos and require `Authorization: Bearer $POLICY_ADMIN_TOKEN`.
+controlled demos and require the policy admin token. There is no arbitrary
+policy-service audit endpoint; the Fastify API records audit events internally.
 Rules match exact tool/action values and optionally an exact actor. A
 specific actor match takes precedence over a wildcard actor match; within the
 same specificity, deny takes precedence over allow. Unmatched requests remain
@@ -111,7 +141,8 @@ curl -X POST http://localhost:3000/v1/credentials/<credential-id>/revoke \
 ```
 
 For PostgreSQL, apply `infra/migrations/002_create_credentials.sql` after the
-agent migration, then `infra/migrations/003_create_audit_events.sql`. The memory fallback stores hashed secrets in process memory
+agent migration, then `infra/migrations/003_create_audit_events.sql` and
+`infra/migrations/005_add_agent_identity_metadata.sql`. The memory fallback stores hashed secrets in process memory
 and is intended only for development; issued credentials disappear on restart.
 
 ## Audit and protected MCP boundary
@@ -132,12 +163,17 @@ curl -X POST http://localhost:3000/v1/mcp/invoke \
   -d '{"agentId":"agent-2","toolId":"example-tool","credentialId":"<credential-id>"}'
 ```
 
-The boundary executes a configurable HTTP tool transport after credential and
-policy checks. Set `MCP_TOOL_URL` to an external MCP-compatible gateway
-endpoint; the request body contains `toolId`, `action`, `payload`, and
-`correlationId`. The response JSON becomes the tool result. If unset, the API
-uses a deterministic local adapter for development. Both policy denials and
-downstream tool failures are audited.
+The boundary executes a configurable Streamable HTTP MCP transport after
+credential and policy checks. Set `MCP_TOOL_URL` to an MCP endpoint (the demo
+uses `http://localhost:8010/mcp`). The API negotiates one MCP session with
+`initialize`, sends `notifications/initialized`, and invokes the selected tool
+with `tools/call`; the invocation is mapped to the tool name and arguments
+(`action`, payload fields, and `correlationId`). JSON-RPC errors, malformed
+responses, session loss, and timeouts are returned as explicit downstream
+failures. If unset, the API uses a deterministic local adapter for development.
+Blank, whitespace-only, and
+overlong correlation IDs are replaced with generated IDs. Both policy denials
+and downstream tool failures are audited.
 
 Seed a complete demo flow after starting the API and policy service:
 
@@ -151,7 +187,7 @@ secret is printed once; treat the output as sensitive and revoke the
 credential after the demo.
 
 For the browser showcase, start the API with
-`MCP_TOOL_URL=http://localhost:8010/v1/tools/invoke`, run the seed command,
+`MCP_TOOL_URL=http://localhost:8010/mcp`, run the seed command,
 then create a demo virtual environment, install its dependencies, and launch
 Gradio:
 
@@ -175,17 +211,10 @@ The final validation commands are:
 
 ```sh
 npm run build && npm test
-(cd services/policy && python3 -m pytest -q tests)
-(cd services/tool && python3 -m pytest -q tests)
+python3 -m pytest -q services/policy/tests
 python3 -m json.tool packages/contracts/schemas/domain.json >/dev/null
 docker compose -f infra/docker-compose.yml config >/dev/null
-npm audit --omit=dev --audit-level=high
 ```
-
-This project is an MVP prototype and local/demo foundation; production
-deployment is explicitly out of scope until HTTPS, managed secrets, rate
-limiting, identity/RBAC, audit retention, observability, backups, and a
-standards-complete MCP transport are added.
 
 See [docs/mvp-evaluation.md](docs/mvp-evaluation.md) for the MVP evaluation,
 benchmark interpretation, security assessment, readiness decision, and
