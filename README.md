@@ -29,6 +29,7 @@ psql "$DATABASE_URL" -f infra/migrations/001_create_agents.sql
 psql "$DATABASE_URL" -f infra/migrations/002_create_credentials.sql
 psql "$DATABASE_URL" -f infra/migrations/003_create_audit_events.sql
 psql "$DATABASE_URL" -f infra/migrations/004_create_policies.sql
+psql "$DATABASE_URL" -f infra/migrations/005_add_agent_identity_metadata.sql
 AGENT_REPOSITORY=postgres npm run dev:api
 python3 -m venv services/policy/.venv
 . services/policy/.venv/bin/activate
@@ -45,10 +46,14 @@ API health: `http://localhost:3000/health`; policy health: `http://localhost:800
 
 ## Operator dashboard
 
-The API exposes authenticated read-only overview routes:
+The API exposes authenticated read-only operator routes:
 
 - `GET /v1/dashboard/summary`: agent status/risk counts, audit totals, and the latest ten safe audit events.
-- `GET /v1/audit?limit=50&eventType=authorization`: newest audit events, optionally filtered by event type.
+- `GET /v1/dashboard/health`: API health plus a live policy-service health check.
+- `GET /v1/dashboard/agents` and `GET /v1/dashboard/agents/:id`: registry posture, identity metadata, correlated audit timeline, and matching policies.
+- `GET /v1/audit?limit=50&agentId=...&toolId=...&decision=allowed&correlationId=...&eventType=authorization&from=...&to=...`: authenticated audit explorer filters.
+- `GET /v1/policies`: policy listing with effect, target, version, status, and rationale metadata.
+- `POST /v1/policies/simulate`: authenticated policy simulation; the response includes the real decision and an explicit allow/deny explanation.
 
 Both routes require the same `ADMIN_API_TOKEN` bearer token as the registry routes. Start the API, then run the dashboard in another shell:
 
@@ -58,7 +63,7 @@ export API_URL='http://localhost:3000'
 npm --workspace @mcp/dashboard run dev
 ```
 
-Open `http://localhost:5173`. Vite proxies API requests and injects the token server-side; the token is never bundled into browser code. For a deployed dashboard, configure the hosting reverse proxy to authenticate `/v1/dashboard/*` and `/v1/audit` server-side rather than adding a token to frontend environment variables. The dashboard explicitly handles loading, empty, and API error states. Live refresh and SSE/WebSocket transport are intentionally deferred to a future phase.
+Open `http://localhost:5173`. Vite proxies API requests and injects the token server-side; the token is never bundled into browser code. For a deployed dashboard, configure the hosting reverse proxy to authenticate `/v1/dashboard/*` and `/v1/audit` server-side rather than adding a token to frontend environment variables. The dashboard explicitly handles loading, empty, error, and dependency-unavailable states. It polls the authenticated API for current data; it does not pretend to provide WebSocket or SSE live updates.
 
 The policy service requires `Authorization: Bearer <POLICY_SERVICE_TOKEN>` on
 `POST /v1/authorize`; the API client sends this token from its environment.
@@ -80,7 +85,7 @@ uvicorn services.policy.app.main:app --reload --port 8000
 ```
 
 Set `POLICY_REPOSITORY=postgres` with `DATABASE_URL` to persist policies in
-PostgreSQL; the migration order is `001` through `004`. The default
+PostgreSQL; the migration order is `001` through `005`. The default
 `POLICY_REPOSITORY=memory` mode is process-local and can be seeded with
 `POLICY_RULES_JSON`. `POST /v1/policies` and `GET /v1/policies` support
 controlled demos and require the policy admin token. There is no arbitrary
@@ -136,7 +141,8 @@ curl -X POST http://localhost:3000/v1/credentials/<credential-id>/revoke \
 ```
 
 For PostgreSQL, apply `infra/migrations/002_create_credentials.sql` after the
-agent migration, then `infra/migrations/003_create_audit_events.sql`. The memory fallback stores hashed secrets in process memory
+agent migration, then `infra/migrations/003_create_audit_events.sql` and
+`infra/migrations/005_add_agent_identity_metadata.sql`. The memory fallback stores hashed secrets in process memory
 and is intended only for development; issued credentials disappear on restart.
 
 ## Audit and protected MCP boundary

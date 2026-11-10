@@ -131,20 +131,26 @@ and can be applied independently. The remaining operational gaps are:
 | --- | --- | --- |
 | Local prototype | **Ready** | Core flows, tests, schema checks, and local startup are documented |
 | Demo/pilot evaluation | **Ready with limitations** | Suitable for a controlled showcase using non-production credentials |
-| Production deployment | **Not ready** | Missing persisted policy management, admin authentication, standards-complete MCP integration, observability, and operational controls |
+| Production deployment | **Not ready** | Shared bearer administration, standards-complete MCP integration, metrics/tracing, retention/tamper evidence, and operational controls remain |
 
 ## Recommended next research
 
-1. Protect policy administration with an authenticated owner/admin boundary.
+1. Replace shared bearer administration with an authenticated owner/admin boundary and scoped roles.
 2. Expand the minimal MCP transport toward full capability discovery and
    measure end-to-end tool latency.
 3. Add administrator authentication, rate limiting, constant-time comparisons,
    key rotation, and owner identity validation.
-4. Add authenticated audit search, retention, and tamper-evidence controls.
+4. Add durable audit search, retention, tamper-evidence controls, and export governance.
 5. Repeat benchmarks with PostgreSQL and realistic concurrent workloads.
 6. Add CI for TypeScript, Python, schema, migrations, dependency audits, and
    security regression tests.
 7. Deploy the API over HTTPS before building the Gradio Space integration.
+
+The completed MVP intentionally defers WebSocket/SSE activity delivery, alert
+rules, policy authoring/version rollback, distributed tracing/metrics, and
+multi-tenant identity federation. The dashboard's activity and health views
+therefore remain honest read-only polling surfaces over real API and
+dependency responses.
 
 ## Reproduction commands
 
@@ -152,6 +158,7 @@ and can be applied independently. The remaining operational gaps are:
 npm run build
 npm test
 python3 -m pytest -q services/policy/tests
+cd services/tool && PYTHONPATH=. python3 -m pytest -q tests
 python3 -m json.tool packages/contracts/schemas/domain.json >/dev/null
 docker compose -f infra/docker-compose.yml config >/dev/null
 ```

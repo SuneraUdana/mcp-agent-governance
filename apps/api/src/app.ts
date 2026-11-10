@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { AgentConflictError, AgentValidationError, type AgentRepository } from './registry.js';
-import { createPolicyAuthorizer, PolicyServiceTimeoutError, PolicyServiceUnavailableError, type PolicyAuthorizer } from './policy-client.js';
+import { createPolicyAuthorizer, createPolicyGateway, PolicyServiceTimeoutError, PolicyServiceUnavailableError, type PolicyAuthorizer, type PolicyGateway } from './policy-client.js';
 import type { AgentInput, AuditEventType, AuditListResponse, DashboardSummary } from './types.js';
 import { CredentialValidationError, type CredentialRepository } from './credentials.js';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +22,7 @@ const agentBodySchema = {
     purpose: { ...nonEmptyString, maxLength: 1000 },
     riskTier: { type: 'string', enum: ['low', 'medium', 'high'] },
     expiresAt: { type: 'string' },
+    identityMetadata: { type: 'object', additionalProperties: { type: 'string', minLength: 1, maxLength: 500 }, maxProperties: 20 },
   },
 } as const;
 const agentUpdateBodySchema = {
@@ -34,6 +35,7 @@ const agentUpdateBodySchema = {
     purpose: { ...nonEmptyString, maxLength: 1000 },
     riskTier: { type: 'string', enum: ['low', 'medium', 'high'] },
     expiresAt: { type: 'string' },
+    identityMetadata: { type: 'object', additionalProperties: { type: 'string', minLength: 1, maxLength: 500 }, maxProperties: 20 },
   },
 } as const;
 const credentialBodySchema = {
@@ -75,7 +77,19 @@ const auditQuerySchema = {
   properties: {
     limit: { type: 'string', pattern: '^(?:[1-9]|[1-9][0-9]|100)$', default: '50' },
     eventType: { type: 'string', enum: auditEventTypes },
+    agentId: { type: 'string', minLength: 1, maxLength: 100 },
+    toolId: { type: 'string', minLength: 1, maxLength: 100 },
+    decision: { type: 'string', enum: ['allowed', 'denied'] },
+    correlationId: { type: 'string', minLength: 1, maxLength: 128 },
+    from: { type: 'string', format: 'date-time' },
+    to: { type: 'string', format: 'date-time' },
   },
+} as const;
+const policySimulationSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['actorId', 'toolId'],
+  properties: { actorId: nonEmptyString, toolId: nonEmptyString, action: nonEmptyString, context: { type: 'object', additionalProperties: true } },
 } as const;
 const auditEventResponseSchema = {
   type: 'object',
@@ -150,13 +164,13 @@ const dashboardSummaryResponseSchema = {
   },
 } as const;
 
-export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository(), invokeTool: ToolAdapter = localToolAdapter, adminToken = process.env.ADMIN_API_TOKEN): FastifyInstance {
+export function buildApp(repository: AgentRepository, authorize: PolicyAuthorizer = createPolicyAuthorizer(), credentials?: CredentialRepository, audit: AuditRepository = new MemoryAuditRepository(), invokeTool: ToolAdapter = localToolAdapter, adminToken = process.env.ADMIN_API_TOKEN, policyGateway: PolicyGateway = createPolicyGateway()): FastifyInstance {
   const app = Fastify({ logger: true, ajv: { customOptions: { coerceTypes: false } } });
   app.register(swagger, { openapi: { info: { title: 'MCP Agent API', version: '0.1.0' } } });
   app.register(swaggerUi, { routePrefix: '/docs' });
   app.get('/health', async () => ({ status: 'ok', service: 'api' }));
   app.addHook('preHandler', async (request, reply) => {
-    if (!request.url.startsWith('/v1/agents') && !request.url.startsWith('/v1/credentials') && !request.url.startsWith('/v1/dashboard') && !request.url.startsWith('/v1/audit')) return;
+    if (!request.url.startsWith('/v1/agents') && !request.url.startsWith('/v1/credentials') && !request.url.startsWith('/v1/dashboard') && !request.url.startsWith('/v1/audit') && !request.url.startsWith('/v1/policies')) return;
     const failure = requireAdminToken(request, adminToken);
     if (failure) return reply.code(failure.statusCode).send({ error: failure.error });
   });
@@ -255,11 +269,47 @@ export function buildApp(repository: AgentRepository, authorize: PolicyAuthorize
     }
 
   });
-  app.get<{ Querystring: { limit?: string; eventType?: AuditEventType }; Reply: AuditListResponse }>('/v1/audit', { schema: { querystring: auditQuerySchema, response: { 200: auditListResponseSchema } } }, async (request) => {
+  app.get<{ Querystring: { limit?: string; eventType?: AuditEventType; agentId?: string; toolId?: string; decision?: 'allowed' | 'denied'; correlationId?: string; from?: string; to?: string }; Reply: AuditListResponse }>('/v1/audit', { schema: { querystring: auditQuerySchema, response: { 200: auditListResponseSchema } } }, async (request) => {
     const allEvents = await audit.list();
-    const filtered = request.query.eventType ? allEvents.filter((event) => event.eventType === request.query.eventType) : allEvents;
+    const filtered = filterAuditEvents(allEvents, request.query);
     const events = filtered.slice().sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)).slice(0, Number(request.query.limit ?? 50)).map(publicAuditEvent);
     return { events, total: filtered.length };
+  });
+  app.get('/v1/policies', async (_request, reply) => {
+    try { return reply.send(await policyGateway.listPolicies()); }
+    catch (error) {
+      if (error instanceof PolicyServiceTimeoutError) return reply.code(504).send({ error: error.message });
+      if (error instanceof PolicyServiceUnavailableError) return reply.code(503).send({ error: error.message });
+      throw error;
+    }
+  });
+  app.post<{ Body: { actorId: string; toolId: string; action?: string; context?: Record<string, unknown> } }>('/v1/policies/simulate', { schema: { body: policySimulationSchema } }, async (request, reply) => {
+    try {
+      const decision = await authorize(request.body);
+      return reply.send({ ...decision, request: request.body, evaluatedAt: new Date().toISOString(), explanation: decision.allowed ? `Allowed because ${decision.reason}` : `Denied because ${decision.reason}` });
+    } catch (error) {
+      if (error instanceof PolicyServiceTimeoutError) return reply.code(504).send({ error: error.message });
+      if (error instanceof PolicyServiceUnavailableError) return reply.code(503).send({ error: error.message });
+      throw error;
+    }
+  });
+  app.get('/v1/dashboard/health', async (_request, reply) => {
+    const policy = await policyGateway.health();
+    return reply.send({ generatedAt: new Date().toISOString(), api: { status: 'ok' }, policy });
+  });
+  app.get('/v1/dashboard/agents', async () => {
+    const [agents, events] = await Promise.all([repository.list(), audit.list()]);
+    return agents.map((agent) => ({
+      ...agent,
+      auditEventCount: events.filter((event) => event.agentId === agent.id).length,
+      lastActivityAt: events.filter((event) => event.agentId === agent.id).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))[0]?.occurredAt ?? null,
+    }));
+  });
+  app.get<{ Params: { id: string } }>('/v1/dashboard/agents/:id', async (request, reply) => {
+    const agent = await repository.get(request.params.id);
+    if (!agent) return reply.code(404).send({ error: 'agent not found' });
+    const [events, policies] = await Promise.all([audit.list(), policyGateway.listPolicies()]);
+    return reply.send({ agent, policies: policies.filter((policy) => policy.actorId === agent.id || policy.actorId == null), auditTimeline: events.filter((event) => event.agentId === agent.id).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).map(publicAuditEvent) });
   });
   app.get<{ Reply: DashboardSummary }>('/v1/dashboard/summary', { schema: { response: { 200: dashboardSummaryResponseSchema } } }, async () => {
     const [agents, auditEvents] = await Promise.all([repository.list(), audit.list()]);
@@ -306,6 +356,21 @@ function redactSensitiveMetadata(metadata: Record<string, unknown>): Record<stri
 
 function correlationId(value: string | string[] | undefined): string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 128 ? value : randomUUID();
+}
+
+function filterAuditEvents(events: Awaited<ReturnType<AuditRepository['list']>>, query: {
+  eventType?: AuditEventType; agentId?: string; toolId?: string; decision?: 'allowed' | 'denied'; correlationId?: string; from?: string; to?: string;
+}): Awaited<ReturnType<AuditRepository['list']>> {
+  return events.filter((event) => {
+    if (query.eventType && event.eventType !== query.eventType) return false;
+    if (query.agentId && event.agentId !== query.agentId) return false;
+    if (query.toolId && event.toolId !== query.toolId) return false;
+    if (query.correlationId && event.correlationId !== query.correlationId) return false;
+    if (query.decision && event.allowed !== (query.decision === 'allowed')) return false;
+    if (query.from && event.occurredAt < query.from) return false;
+    if (query.to && event.occurredAt > query.to) return false;
+    return true;
+  });
 }
 
 function handleRegistryError(error: unknown, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): unknown {

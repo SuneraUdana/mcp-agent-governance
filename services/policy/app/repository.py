@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Protocol
 
 from .main_types import PolicyRule
@@ -29,6 +30,8 @@ class MemoryPolicyRepository:
         return self._rules.get(policy_id)
 
     def create(self, rule: PolicyRule) -> PolicyRule:
+        now = datetime.now(timezone.utc).isoformat()
+        rule = rule.model_copy(update={"created_at": rule.created_at or now, "updated_at": rule.updated_at or now})
         self._rules[rule.policy_id] = rule
         return rule
 

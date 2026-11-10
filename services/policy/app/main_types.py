@@ -15,6 +15,9 @@ class PolicyRule(PolicyContractModel):
     action: str = Field(default="invoke", min_length=1)
     reason: str = Field(min_length=1)
     version: int = Field(default=1, ge=1)
+    status: Literal["active", "disabled"] = "active"
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class AuthorizationRequest(PolicyContractModel):

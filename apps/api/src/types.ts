@@ -6,12 +6,13 @@ export type Agent = {
   ownerId: string;
   purpose: string;
   riskTier: RiskTier;
+  identityMetadata?: Record<string, string>;
   status: AgentStatus;
   expiresAt?: string;
   createdAt: string;
   updatedAt: string;
 };
-export type AgentInput = Pick<Agent, 'id' | 'name' | 'ownerId' | 'purpose' | 'riskTier'> & { expiresAt?: string };
+export type AgentInput = Pick<Agent, 'id' | 'name' | 'ownerId' | 'purpose' | 'riskTier'> & { expiresAt?: string; identityMetadata?: Record<string, string> };
 export type Owner = { id: string; name: string; email?: string };
 export type Credential = { id: string; ownerId: string; kind: string; secretRef?: string };
 export type CredentialRecord = {
@@ -66,6 +67,9 @@ export type Policy = {
   action: string;
   reason: string;
   version: number;
+  status?: 'active' | 'disabled';
+  createdAt?: string;
+  updatedAt?: string;
 };
 export type PolicyWire = {
   policy_id: string;
@@ -75,6 +79,9 @@ export type PolicyWire = {
   action: string;
   reason: string;
   version: number;
+  status?: 'active' | 'disabled';
+  created_at?: string;
+  updated_at?: string;
 };
 export type Tool = { id: string; name: string; mcpServer: string };
 export type AuthorizationDecision = { allowed: boolean; reason: string; policyId?: string };

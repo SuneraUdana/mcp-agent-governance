@@ -11,7 +11,7 @@ Operator dashboard (:5173, dev proxy)
   v
 Fastify API (:3000)
   |-- Agent registry (in-memory for this slice)
-  |-- Read-only operator overview (/v1/dashboard/summary, /v1/audit)
+  |-- Authenticated operator read models (/v1/dashboard/*, /v1/audit, /v1/policies)
   |-- MCP gateway boundary (/v1/mcp/invoke)
   `-- Authorization boundary (/v1/authorize)
           |
@@ -57,8 +57,22 @@ validated internal events.
 The operator dashboard uses TanStack Query for API state and Recharts for its
 risk overview. The development proxy injects `ADMIN_API_TOKEN` server-side so
 credentials never enter browser bundles. Production deployments should put
-the equivalent authentication in a reverse proxy or backend-for-frontend.
-Live SSE/WebSocket updates are intentionally not part of this increment.
+the equivalent authentication in a reverse proxy or backend-for-frontend. The
+dashboard reads agent details, policies, simulation decisions, filtered audit
+events, and dependency health from authenticated API routes. It uses bounded
+polling for freshness; SSE/WebSocket delivery, alerting, and push fan-out are
+explicitly deferred.
+
+## Read-only operator surfaces
+
+Fastify owns the operator read model and authenticates every route with the
+administrative bearer token. Agent detail correlates registry identity,
+identity metadata, matching policy targets, and audit events by `agentId`.
+Policy simulation calls the same policy authorizer used by the MCP boundary,
+so the rationale shown in the UI is not a client-side prediction. Policy
+listing uses a separate server-side policy-admin token and returns only
+validated policy metadata. No route returns credential plaintext or accepts
+arbitrary audit writes.
 
 ## Policy contract
 
