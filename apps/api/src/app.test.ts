@@ -35,35 +35,6 @@ test('dashboard overview and audit endpoints are authenticated and read-only', a
     metadata: { policyId: 'policy-1', token: 'must-not-leak' },
   });
 
-  test('operator read models expose identity, correlated audit filters, policies, simulation, and health', async () => {
-    const agents = new MemoryAgentRepository();
-    const audit = new MemoryAuditRepository();
-    await agents.create({ id: 'operator-agent', name: 'Operator Agent', ownerId: 'owner-1', purpose: 'operator test', riskTier: 'medium', identityMetadata: { provider: 'demo', subject: 'sub-1' } });
-    await audit.record({ correlationId: 'corr-match', eventType: 'authorization', agentId: 'operator-agent', toolId: 'weather', allowed: true, rationale: 'matched policy', metadata: {} });
-    await audit.record({ correlationId: 'corr-other', eventType: 'tool_invocation', agentId: 'other-agent', toolId: 'email', allowed: false, rationale: 'denied', metadata: {} });
-    const app = buildApp(
-      agents,
-      async () => ({ allowed: true, reason: 'matched policy', policyId: 'policy-weather' }),
-      undefined,
-      audit,
-      undefined,
-      'test-admin',
-      { listPolicies: async () => [{ policyId: 'policy-weather', effect: 'allow', toolId: 'weather', actorId: 'operator-agent', action: 'invoke', reason: 'approved', version: 3 }], health: async () => ({ status: 'ok' }) },
-    );
-    const detail = await app.inject({ method: 'GET', url: '/v1/dashboard/agents/operator-agent', headers: adminHeaders });
-    assert.equal(detail.statusCode, 200);
-    assert.deepEqual(detail.json().agent.identityMetadata, { provider: 'demo', subject: 'sub-1' });
-    assert.equal(detail.json().auditTimeline[0].correlationId, 'corr-match');
-    assert.equal(detail.json().policies[0].version, 3);
-    const filtered = await app.inject({ method: 'GET', url: '/v1/audit?agentId=operator-agent&toolId=weather&decision=allowed&correlationId=corr-match', headers: adminHeaders });
-    assert.equal(filtered.statusCode, 200);
-    assert.equal(filtered.json().total, 1);
-    const simulation = await app.inject({ method: 'POST', url: '/v1/policies/simulate', headers: { ...adminHeaders, 'content-type': 'application/json' }, payload: { actorId: 'operator-agent', toolId: 'weather' } });
-    assert.equal(simulation.statusCode, 200);
-    assert.match(simulation.json().explanation, /Allowed/);
-    assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/dashboard/health', headers: adminHeaders })).json().policy, { status: 'ok' });
-    await app.close();
-  });
   await audit.record({
     correlationId: 'dashboard-2',
     eventType: 'tool_invocation',
@@ -92,6 +63,36 @@ test('dashboard overview and audit endpoints are authenticated and read-only', a
   assert.equal(filtered.json().total, 1);
   assert.equal(filtered.json().events[0].metadata.token, '[REDACTED]');
   assert.equal((await app.inject({ method: 'GET', url: '/v1/audit?limit=0', headers: adminHeaders })).statusCode, 400);
+  await app.close();
+});
+
+test('operator read models expose identity, correlated audit filters, policies, simulation, and health', async () => {
+  const agents = new MemoryAgentRepository();
+  const audit = new MemoryAuditRepository();
+  await agents.create({ id: 'operator-agent', name: 'Operator Agent', ownerId: 'owner-1', purpose: 'operator test', riskTier: 'medium', identityMetadata: { provider: 'demo', subject: 'sub-1' } });
+  await audit.record({ correlationId: 'corr-match', eventType: 'authorization', agentId: 'operator-agent', toolId: 'weather', allowed: true, rationale: 'matched policy', metadata: {} });
+  await audit.record({ correlationId: 'corr-other', eventType: 'tool_invocation', agentId: 'other-agent', toolId: 'email', allowed: false, rationale: 'denied', metadata: {} });
+  const app = buildApp(
+    agents,
+    async () => ({ allowed: true, reason: 'matched policy', policyId: 'policy-weather' }),
+    undefined,
+    audit,
+    undefined,
+    'test-admin',
+    { listPolicies: async () => [{ policyId: 'policy-weather', effect: 'allow', toolId: 'weather', actorId: 'operator-agent', action: 'invoke', reason: 'approved', version: 3 }], health: async () => ({ status: 'ok' }) },
+  );
+  const detail = await app.inject({ method: 'GET', url: '/v1/dashboard/agents/operator-agent', headers: adminHeaders });
+  assert.equal(detail.statusCode, 200);
+  assert.deepEqual(detail.json().agent.identityMetadata, { provider: 'demo', subject: 'sub-1' });
+  assert.equal(detail.json().auditTimeline[0].correlationId, 'corr-match');
+  assert.equal(detail.json().policies[0].version, 3);
+  const filtered = await app.inject({ method: 'GET', url: '/v1/audit?agentId=operator-agent&toolId=weather&decision=allowed&correlationId=corr-match', headers: adminHeaders });
+  assert.equal(filtered.statusCode, 200);
+  assert.equal(filtered.json().total, 1);
+  const simulation = await app.inject({ method: 'POST', url: '/v1/policies/simulate', headers: { ...adminHeaders, 'content-type': 'application/json' }, payload: { actorId: 'operator-agent', toolId: 'weather' } });
+  assert.equal(simulation.statusCode, 200);
+  assert.match(simulation.json().explanation, /Allowed/);
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/dashboard/health', headers: adminHeaders })).json().policy, { status: 'ok' });
   await app.close();
 });
 
