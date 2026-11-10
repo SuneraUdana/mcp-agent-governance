@@ -59,7 +59,7 @@ Set `POLICY_REPOSITORY=postgres` with `DATABASE_URL` to persist policies in
 PostgreSQL; the migration order is `001` through `004`. The default
 `POLICY_REPOSITORY=memory` mode is process-local and can be seeded with
 `POLICY_RULES_JSON`. `POST /v1/policies` and `GET /v1/policies` support
-controlled demos; these administrative endpoints are not authenticated yet.
+controlled demos and require `Authorization: Bearer $POLICY_ADMIN_TOKEN`.
 Rules match exact tool/action values and optionally an exact actor. A
 specific actor match takes precedence over a wildcard actor match; within the
 same specificity, deny takes precedence over allow. Unmatched requests remain
@@ -152,12 +152,19 @@ credential after the demo.
 
 For the browser showcase, start the API with
 `MCP_TOOL_URL=http://localhost:8010/v1/tools/invoke`, run the seed command,
-then install the demo dependency and launch Gradio:
+then create a demo virtual environment, install its dependencies, and launch
+Gradio:
 
 ```sh
-pip install -r demo/requirements.txt
-DEMO_API_URL=http://localhost:3000 python demo/gradio_app.py
+python3 -m venv demo/.venv
+demo/.venv/bin/python -m pip install -r demo/requirements.txt
+DEMO_API_URL=http://localhost:3000 demo/.venv/bin/python demo/gradio_app.py
 ```
+
+The demo environment is separate from `services/policy/.venv`; do not install
+the demo dependencies into a different Python interpreter and then launch it
+with `python` from another environment. Gradio only starts the browser UI: the
+API, policy service, and external demo tool must already be running.
 
 Paste the seed output values into the Gradio form. A successful invocation
 shows the external tool result and correlation ID. Revoke the credential with
@@ -168,10 +175,17 @@ The final validation commands are:
 
 ```sh
 npm run build && npm test
-python3 -m pytest -q services/policy/tests
+(cd services/policy && python3 -m pytest -q tests)
+(cd services/tool && python3 -m pytest -q tests)
 python3 -m json.tool packages/contracts/schemas/domain.json >/dev/null
 docker compose -f infra/docker-compose.yml config >/dev/null
+npm audit --omit=dev --audit-level=high
 ```
+
+This project is an MVP prototype and local/demo foundation; production
+deployment is explicitly out of scope until HTTPS, managed secrets, rate
+limiting, identity/RBAC, audit retention, observability, backups, and a
+standards-complete MCP transport are added.
 
 See [docs/mvp-evaluation.md](docs/mvp-evaluation.md) for the MVP evaluation,
 benchmark interpretation, security assessment, readiness decision, and
