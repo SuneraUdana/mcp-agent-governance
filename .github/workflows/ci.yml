@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm --workspace @mcp/dashboard run build
+      - run: npm test
+
+  python:
+    name: Python services
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r services/policy/requirements.txt
+      - run: python -m pytest -q tests
+        working-directory: services/policy
+      - run: python -m pip install -r services/tool/requirements.txt
+      - run: python -m pytest -q tests
+        working-directory: services/tool
+
+  contracts-and-compose:
+    name: Contracts and migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m json.tool packages/contracts/schemas/domain.json >/dev/null
+      - run: docker compose -f infra/docker-compose.yml config >/dev/null
+      - run: docker compose -f infra/docker-compose.yml up -d postgres redis
+      - name: Wait for PostgreSQL and Redis
+        run: |
+          for i in $(seq 1 30); do
+            docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U mcp -d mcp >/dev/null 2>&1 &&
+            test "$(docker compose -f infra/docker-compose.yml exec -T redis redis-cli ping | tr -d '\r')" = "PONG" &&
+            exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Apply migrations
+        run: |
+          set -e
+          for migration in infra/migrations/*.sql; do
+            docker compose -f infra/docker-compose.yml exec -T postgres psql -v ON_ERROR_STOP=1 -U mcp -d mcp < "$migration"
+          done
+      - if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

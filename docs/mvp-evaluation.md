@@ -53,8 +53,9 @@ scope checks happen before the protected MCP boundary requests authorization.
 | Audit | Authorization, issuance, revocation, and invocation events with correlation ID and safe metadata | Passed |
 | Persistence | PostgreSQL migrations for agents, credentials, and audit events; explicit memory fallback | Migration validation passed |
 
-The API suite contains seven focused tests, including security edge cases. The
-policy service suite contains two tests for health and default-deny behavior.
+The API suite contains focused tests, including security edge cases. The policy
+service suite covers health, default-deny behavior, precedence, and
+administrative authentication.
 
 ## Security assessment
 

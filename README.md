@@ -188,12 +188,19 @@ credential after the demo.
 
 For the browser showcase, start the API with
 `MCP_TOOL_URL=http://localhost:8010/mcp`, run the seed command,
-then install the demo dependency and launch Gradio:
+then create a demo virtual environment, install its dependencies, and launch
+Gradio:
 
 ```sh
-pip install -r demo/requirements.txt
-DEMO_API_URL=http://localhost:3000 python demo/gradio_app.py
+python3 -m venv demo/.venv
+demo/.venv/bin/python -m pip install -r demo/requirements.txt
+DEMO_API_URL=http://localhost:3000 demo/.venv/bin/python demo/gradio_app.py
 ```
+
+The demo environment is separate from `services/policy/.venv`; do not install
+the demo dependencies into a different Python interpreter and then launch it
+with `python` from another environment. Gradio only starts the browser UI: the
+API, policy service, and external demo tool must already be running.
 
 Paste the seed output values into the Gradio form. A successful invocation
 shows the external tool result and correlation ID. Revoke the credential with
